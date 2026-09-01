@@ -98,10 +98,13 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
     for col in range(1,len(HEADERS)+1): ws.column_dimensions[get_column_letter(col)].width = 22 if col<4 else 48
     for row in ws.iter_rows(min_row=2):
         for cell in row: cell.alignment=Alignment(vertical="top", wrap_text=True)
-    wb.save(xlsx)
-    with csvp.open("w", newline="", encoding="utf-8-sig") as f: w=csv.DictWriter(f, fieldnames=HEADERS); w.writeheader(); w.writerows(rows)
-    with (settings.output_root/"errors.csv").open("w", newline="", encoding="utf-8-sig") as f: w=csv.DictWriter(f, fieldnames=["path","stage","error"]); w.writeheader(); w.writerows(errors)
-    (settings.output_root/"run.log").write_text(f"发现数: {len(rows)}\n成功数: {len(rows)-len(errors)}\n失败数: {len(errors)}\n耗时秒: {elapsed:.2f}\n", encoding="utf-8")
+    try:
+        wb.save(xlsx)
+        with csvp.open("w", newline="", encoding="utf-8-sig") as f: w=csv.DictWriter(f, fieldnames=HEADERS); w.writeheader(); w.writerows(rows)
+        with (settings.output_root/"errors.csv").open("w", newline="", encoding="utf-8-sig") as f: w=csv.DictWriter(f, fieldnames=["path","stage","error"]); w.writeheader(); w.writerows(errors)
+        (settings.output_root/"run.log").write_text(f"发现数: {len(rows)}\n成功数: {len(rows)-len(errors)}\n失败数: {len(errors)}\n耗时秒: {elapsed:.2f}\n", encoding="utf-8")
+    except PermissionError as exc:
+        raise PermissionError(f"输出文件被占用，请关闭 Excel/编辑器后重试: {exc.filename}") from exc
 
 def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_pages=None, dry_run=False) -> dict[str,int]:
     if not settings.source_root.exists(): raise FileNotFoundError(f"源目录不存在: {settings.source_root}")
