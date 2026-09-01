@@ -90,7 +90,7 @@ def process_pdf(pdf: Path, settings: Settings, sequence: int, watermark=True) ->
     except Exception as exc:
         return pdf.stem, [], f"{type(exc).__name__}: {exc}"
 
-def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[dict[str,str]], elapsed: float) -> None:
+def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[dict[str,str]], elapsed: float, details: list[str] | None = None) -> None:
     settings.output_root.mkdir(parents=True, exist_ok=True); xlsx=settings.output_root/settings.table["xlsx"]; csvp=settings.output_root/settings.table["csv"]
     wb=Workbook(); ws=wb.active; ws.title="PDF目录"; ws.append(HEADERS); ws.freeze_panes="A2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HEADERS))}{len(rows)+1}"
     for c in ws[1]: c.font=Font(bold=True); c.alignment=Alignment(horizontal="center")
@@ -102,22 +102,35 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
         wb.save(xlsx)
         with csvp.open("w", newline="", encoding="utf-8-sig") as f: w=csv.DictWriter(f, fieldnames=HEADERS); w.writeheader(); w.writerows(rows)
         with (settings.output_root/"errors.csv").open("w", newline="", encoding="utf-8-sig") as f: w=csv.DictWriter(f, fieldnames=["path","stage","error"]); w.writeheader(); w.writerows(errors)
-        (settings.output_root/"run.log").write_text(f"发现数: {len(rows)}\n成功数: {len(rows)-len(errors)}\n失败数: {len(errors)}\n耗时秒: {elapsed:.2f}\n", encoding="utf-8")
+        summary = f"发现数: {len(rows)}\n成功数: {len(rows)-len(errors)}\n失败数: {len(errors)}\n耗时秒: {elapsed:.2f}\n"
+        detail_text = "\n".join(details or [])
+        (settings.output_root/"run.log").write_text((detail_text + "\n\n" if detail_text else "") + summary, encoding="utf-8")
     except PermissionError as exc:
         raise PermissionError(f"输出文件被占用，请关闭 Excel/编辑器后重试: {exc.filename}") from exc
 
 def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_pages=None, dry_run=False) -> dict[str,int]:
     if not settings.source_root.exists(): raise FileNotFoundError(f"源目录不存在: {settings.source_root}")
     files=discover(settings.source_root); lim = limit if limit is not None else settings.processing.get("max_pdfs"); files=files[:lim] if lim is not None else files
-    rows=[]; errors=[]; start=time.time()
+    rows=[]; errors=[]; details=[]; start=time.time()
     for idx, pdf in enumerate(files):
-        if dry_run: continue
+        if dry_run:
+            detail = f"[{idx + 1}/{len(files)}] 扫描完成: {pdf}"
+            LOG.info(detail)
+            details.append(detail)
+            continue
         if mode == "scan": title, paths, err = pdf.stem, [], None
         else: title, paths, err = process_pdf(pdf, settings, idx + 1, not no_watermark)
-        if err: errors.append({"path":str(pdf),"stage":"process","error":err})
+        if err:
+            errors.append({"path":str(pdf),"stage":"process","error":err})
+            detail = f"[{idx + 1}/{len(files)}] 失败: {pdf} ({err})"
+            LOG.error(detail)
+        else:
+            detail = f"[{idx + 1}/{len(files)}] 完成: {pdf}，生成图片 {len(paths)} 张"
+            LOG.info(detail)
+        details.append(detail)
         semester, subject, category = directory_fields(pdf, settings)
         row={"年级":settings.grade,"学期":semester,"科目":subject,"分类":category,"PDF 文件名称":title,"PDF 文件所在位置":str(pdf)}
         for i,h in enumerate(HEADERS[6:]): row[h]=paths[i] if i<len(paths) else ""
         rows.append(row)
-    if not dry_run: write_tables(rows, settings, errors, time.time()-start)
+    if not dry_run: write_tables(rows, settings, errors, time.time()-start, details)
     return {"发现数":len(files),"成功数":len(rows)-len(errors),"失败数":len(errors),"生成图片数":sum(sum(bool(r[h]) for h in HEADERS[6:]) for r in rows)}
