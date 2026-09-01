@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import fitz
+import pymupdf
 import yaml
 from PIL import Image, ImageDraw, ImageFont
 from openpyxl import Workbook
@@ -75,13 +75,13 @@ def process_pdf(pdf: Path, settings: Settings, sequence: int, watermark=True) ->
     folder = settings.output_root / "images" / safe_dir_name(settings.grade) / safe_dir_name(semester) / safe_dir_name(subject or "未分类") / safe_dir_name(category or "未分类") / f"{sequence:06d}"; folder.mkdir(parents=True, exist_ok=True)
     try:
         shutil.copy2(pdf, folder / pdf.name)
-        doc = fitz.open(pdf); title = (doc.metadata.get("title") or "").strip() if settings.table.get("include_metadata_title") else ""
+        doc = pymupdf.open(pdf); title = (doc.metadata.get("title") or "").strip() if settings.table.get("include_metadata_title") else ""
         title = title or pdf.stem; count = min(len(doc), int(settings.render["max_pages"])); paths=[]; fp=_fingerprint(pdf, settings)
         marker = folder / ".fingerprint"
         for i in range(count):
             out = folder / f"page-{i+1:02d}.png"
             if out.exists() and marker.exists() and marker.read_text() == fp: paths.append(str(out.relative_to(settings.output_root)).replace(os.sep, "/")); continue
-            pix = doc.load_page(i).get_pixmap(matrix=fitz.Matrix(float(settings.render["dpi"])/72, float(settings.render["dpi"])/72), alpha=False)
+            pix = doc.load_page(i).get_pixmap(matrix=pymupdf.Matrix(float(settings.render["dpi"])/72, float(settings.render["dpi"])/72), alpha=False)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             if watermark and settings.watermark.get("enabled") and settings.watermark.get("text"):
                 layer=Image.new("RGBA", img.size, (0,0,0,0)); d=ImageDraw.Draw(layer); f=_font(int(settings.watermark["font_size"])); box=d.textbbox((0,0), settings.watermark["text"], font=f); w,h=box[2]-box[0],box[3]-box[1]; margin=max(1,int(min(img.size)*.03)); pos={"bottom_right":(img.width-w-margin,img.height-h-margin),"bottom_left":(margin,img.height-h-margin),"center":((img.width-w)//2,(img.height-h)//2)}[settings.watermark["position"]]; d.text(pos, settings.watermark["text"], font=f, fill=(255,0,0,int(settings.watermark["opacity"]))) ; img=Image.alpha_composite(img.convert("RGBA"),layer).convert("RGB")

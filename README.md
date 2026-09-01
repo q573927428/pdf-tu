@@ -7,7 +7,7 @@
 ## 初始化环境
 
 ```powershell
- python -m venv .venv
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e . --no-build-isolation
