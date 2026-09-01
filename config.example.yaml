@@ -1,7 +1,7 @@
 source_root: "F:\\ipkaishi\\zhixiaoman\\幼升小.zip\\幼升小"
 output_root: "./output"
 grade: "幼升小"
-semester: "全学期"
+semester: "全册"
 watermark:
   enabled: true
   text: "幼升小"

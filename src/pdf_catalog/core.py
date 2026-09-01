@@ -14,7 +14,7 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
 LOG = logging.getLogger(__name__)
-HEADERS = ["年级", "学期", "PDF 文件名称", "PDF 文件所在位置", *[f"转换后的图片 {i}" for i in range(1, 6)]]
+HEADERS = ["年级", "学期", "科目", "分类", "PDF 文件名称", "PDF 文件所在位置", *[f"转换后的图片 {i}" for i in range(1, 6)]]
 
 @dataclass
 class Settings:
@@ -46,6 +46,14 @@ def safe_name(value: str) -> str:
     value = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._") or "pdf"
     return value[:100]
 
+def directory_fields(pdf: Path, settings: Settings) -> tuple[str, str, str]:
+    """从 PDF 相对路径提取学期、科目和分类目录。"""
+    parts = list(pdf.relative_to(settings.source_root).parts[:-1])
+    semester = settings.semester
+    if parts and parts[0] in {"上册", "下册"}:
+        semester, parts = parts[0], parts[1:]
+    return semester, (parts[0] if parts else ""), (parts[1] if len(parts) > 1 else "")
+
 def _font(size: int):
     for p in (r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simhei.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
         if Path(p).exists():
@@ -57,9 +65,9 @@ def _fingerprint(pdf: Path, settings: Settings) -> str:
     st = pdf.stat(); payload = f"{st.st_size}:{st.st_mtime_ns}:{settings.render['dpi']}:{settings.render['max_pages']}:{settings.watermark}"; return hashlib.sha1(payload.encode()).hexdigest()[:12]
 
 def process_pdf(pdf: Path, settings: Settings, watermark=True) -> tuple[str, list[str], str | None]:
-    rel = pdf.relative_to(settings.source_root); category = rel.parts[0] if len(rel.parts) > 1 else "uncategorized"
+    rel = pdf.relative_to(settings.source_root); semester, subject, category = directory_fields(pdf, settings)
     token = hashlib.sha1(str(rel).encode("utf-8")).hexdigest()[:8]
-    folder = settings.output_root / "images" / safe_name(category) / (safe_name(pdf.stem) + "-" + token); folder.mkdir(parents=True, exist_ok=True)
+    folder = settings.output_root / "images" / safe_name(subject or "uncategorized") / safe_name(category or "uncategorized") / (safe_name(pdf.stem) + "-" + token); folder.mkdir(parents=True, exist_ok=True)
     try:
         doc = fitz.open(pdf); title = (doc.metadata.get("title") or "").strip() if settings.table.get("include_metadata_title") else ""
         title = title or pdf.stem; count = min(len(doc), int(settings.render["max_pages"])); paths=[]; fp=_fingerprint(pdf, settings)
@@ -98,8 +106,9 @@ def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_page
         if mode == "scan": title, paths, err = pdf.stem, [], None
         else: title, paths, err = process_pdf(pdf, settings, not no_watermark)
         if err: errors.append({"path":str(pdf),"stage":"process","error":err})
-        row={"年级":settings.grade,"学期":settings.semester,"PDF 文件名称":title,"PDF 文件所在位置":str(pdf)}
-        for i,h in enumerate(HEADERS[4:]): row[h]=paths[i] if i<len(paths) else ""
+        semester, subject, category = directory_fields(pdf, settings)
+        row={"年级":settings.grade,"学期":semester,"科目":subject,"分类":category,"PDF 文件名称":title,"PDF 文件所在位置":str(pdf)}
+        for i,h in enumerate(HEADERS[6:]): row[h]=paths[i] if i<len(paths) else ""
         rows.append(row)
     if not dry_run: write_tables(rows, settings, errors, time.time()-start)
-    return {"发现数":len(files),"成功数":len(rows)-len(errors),"失败数":len(errors),"生成图片数":sum(sum(bool(r[h]) for h in HEADERS[4:]) for r in rows)}
+    return {"发现数":len(files),"成功数":len(rows)-len(errors),"失败数":len(errors),"生成图片数":sum(sum(bool(r[h]) for h in HEADERS[6:]) for r in rows)}
