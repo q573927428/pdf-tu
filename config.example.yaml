@@ -1,0 +1,20 @@
+source_root: "F:\\ipkaishi\\zhixiaoman\\幼升小.zip\\幼升小"
+output_root: "./output"
+grade: "幼升小"
+semester: "全学期"
+watermark:
+  enabled: true
+  text: "幼升小"
+  opacity: 90
+  position: "bottom_right"
+  font_size: 28
+render:
+  dpi: 150
+  max_pages: 5
+processing:
+  # 前期测试建议设置为 10~20；正式全量运行改为 null
+  max_pdfs: 20
+table:
+  xlsx: "pdf_catalog.xlsx"
+  csv: "pdf_catalog.csv"
+  include_metadata_title: false

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdf-catalog-builder"
+version = "0.1.0"
+description = "扫描 PDF、生成前五页图片并输出目录表格"
+requires-python = ">=3.11"
+dependencies = [
+  "pymupdf>=1.24",
+  "openpyxl>=3.1",
+  "Pillow>=10.0",
+  "pyyaml>=6.0",
+]
+
+[project.scripts]
+pdf-catalog = "pdf_catalog.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
