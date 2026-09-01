@@ -1,7 +1,7 @@
 """PDF discovery, rendering and catalog output."""
 from __future__ import annotations
 
-import csv, hashlib, logging, os, re, time
+import csv, hashlib, logging, os, re, time, shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -46,6 +46,11 @@ def safe_name(value: str) -> str:
     value = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._") or "pdf"
     return value[:100]
 
+def safe_dir_name(value: str) -> str:
+    """保留中文目录名，仅替换 Windows 不允许的字符。"""
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value).strip(" .")
+    return value[:100] or "未分类"
+
 def directory_fields(pdf: Path, settings: Settings) -> tuple[str, str, str]:
     """从 PDF 相对路径提取学期、科目和分类目录。"""
     parts = list(pdf.relative_to(settings.source_root).parts[:-1])
@@ -64,11 +69,12 @@ def _font(size: int):
 def _fingerprint(pdf: Path, settings: Settings) -> str:
     st = pdf.stat(); payload = f"{st.st_size}:{st.st_mtime_ns}:{settings.render['dpi']}:{settings.render['max_pages']}:{settings.watermark}"; return hashlib.sha1(payload.encode()).hexdigest()[:12]
 
-def process_pdf(pdf: Path, settings: Settings, watermark=True) -> tuple[str, list[str], str | None]:
+def process_pdf(pdf: Path, settings: Settings, sequence: int, watermark=True) -> tuple[str, list[str], str | None]:
     rel = pdf.relative_to(settings.source_root); semester, subject, category = directory_fields(pdf, settings)
     token = hashlib.sha1(str(rel).encode("utf-8")).hexdigest()[:8]
-    folder = settings.output_root / "images" / safe_name(subject or "uncategorized") / safe_name(category or "uncategorized") / (safe_name(pdf.stem) + "-" + token); folder.mkdir(parents=True, exist_ok=True)
+    folder = settings.output_root / "images" / safe_dir_name(settings.grade) / safe_dir_name(semester) / safe_dir_name(subject or "未分类") / safe_dir_name(category or "未分类") / f"{sequence:06d}"; folder.mkdir(parents=True, exist_ok=True)
     try:
+        shutil.copy2(pdf, folder / pdf.name)
         doc = fitz.open(pdf); title = (doc.metadata.get("title") or "").strip() if settings.table.get("include_metadata_title") else ""
         title = title or pdf.stem; count = min(len(doc), int(settings.render["max_pages"])); paths=[]; fp=_fingerprint(pdf, settings)
         marker = folder / ".fingerprint"
@@ -101,10 +107,10 @@ def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_page
     if not settings.source_root.exists(): raise FileNotFoundError(f"源目录不存在: {settings.source_root}")
     files=discover(settings.source_root); lim = limit if limit is not None else settings.processing.get("max_pdfs"); files=files[:lim] if lim is not None else files
     rows=[]; errors=[]; start=time.time()
-    for pdf in files:
+    for idx, pdf in enumerate(files):
         if dry_run: continue
         if mode == "scan": title, paths, err = pdf.stem, [], None
-        else: title, paths, err = process_pdf(pdf, settings, not no_watermark)
+        else: title, paths, err = process_pdf(pdf, settings, idx + 1, not no_watermark)
         if err: errors.append({"path":str(pdf),"stage":"process","error":err})
         semester, subject, category = directory_fields(pdf, settings)
         row={"年级":settings.grade,"学期":semester,"科目":subject,"分类":category,"PDF 文件名称":title,"PDF 文件所在位置":str(pdf)}
