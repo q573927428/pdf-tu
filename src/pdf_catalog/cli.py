@@ -1,6 +1,7 @@
 """Command line interface for PDF catalog builder."""
 from __future__ import annotations
 import argparse, logging
+import pymupdf
 from .core import load_settings, run
 
 def main() -> None:
@@ -16,6 +17,8 @@ def main() -> None:
         p.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
+    # PDF 解析仍会自动修复部分结构问题，但不把 MuPDF 的底层诊断刷到终端。
+    pymupdf.TOOLS.mupdf_display_errors(False)
     try:
         settings = load_settings(args.config)
         if args.max_pages is not None: settings.render["max_pages"] = args.max_pages

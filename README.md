@@ -8,9 +8,14 @@
 
 ```powershell
 python -m venv .venv
+
+先激活虚拟环境
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e . --no-build-isolation
+
+//或者使用
+.\.venv\Scripts\python.exe -m pip install -e . --no-build-isolation
 ```
 
 ## 预期命令

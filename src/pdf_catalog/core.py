@@ -110,8 +110,19 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
 
 def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_pages=None, dry_run=False) -> dict[str,int]:
     if not settings.source_root.exists(): raise FileNotFoundError(f"源目录不存在: {settings.source_root}")
-    files=discover(settings.source_root); lim = limit if limit is not None else settings.processing.get("max_pdfs"); files=files[:lim] if lim is not None else files
+    LOG.info("开始扫描 PDF 文件: %s", settings.source_root)
+    discovered = discover(settings.source_root)
+    LOG.info("文件扫描完成: 共发现 %d 个 PDF", len(discovered))
+    lim = limit if limit is not None else settings.processing.get("max_pdfs")
+    files = discovered[:lim] if lim is not None else discovered
+    if lim is not None:
+        LOG.info("文件筛选完成: 限制数量=%d，实际处理 %d 个 PDF", lim, len(files))
+    else:
+        LOG.info("文件筛选完成: 未设置数量限制，实际处理 %d 个 PDF", len(files))
     rows=[]; errors=[]; details=[]; start=time.time()
+    start_detail = f"开始处理: 源目录={settings.source_root}，待处理 PDF {len(files)} 个，模式={mode}"
+    LOG.info(start_detail)
+    details.append(start_detail)
     for idx, pdf in enumerate(files):
         if dry_run:
             detail = f"[{idx + 1}/{len(files)}] 扫描完成: {pdf}"
@@ -132,5 +143,8 @@ def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_page
         row={"年级":settings.grade,"学期":semester,"科目":subject,"分类":category,"PDF 文件名称":title,"PDF 文件所在位置":str(pdf)}
         for i,h in enumerate(HEADERS[6:]): row[h]=paths[i] if i<len(paths) else ""
         rows.append(row)
-    if not dry_run: write_tables(rows, settings, errors, time.time()-start, details)
+    if not dry_run:
+        LOG.info("开始写入目录文件: %s", settings.output_root)
+        write_tables(rows, settings, errors, time.time()-start, details)
+        LOG.info("目录文件写入完成: %s", settings.output_root)
     return {"发现数":len(files),"成功数":len(rows)-len(errors),"失败数":len(errors),"生成图片数":sum(sum(bool(r[h]) for h in HEADERS[6:]) for r in rows)}
