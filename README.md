@@ -30,3 +30,16 @@ pdf-catalog run --config config.example.yaml
 $env:PYTHONPATH = "src"
 python -m pdf_catalog.cli run --config config.example.yaml --limit 5
 ```
+
+## 切换年级
+
+一年级、二年级、三年级分别复制一份配置文件，修改 `source_root`、`output_root` 和 `grade`。例如二年级：
+
+```yaml
+source_root: "F:\\ipkaishi\\zhixiaoman\\二年级.zip\\二年级"
+output_root: "./output-二年级"
+grade: "二年级"
+semester: "全册"
+```
+
+当目录包含 `上册/下册` 时，程序会自动识别学期，并将其后的目录写入“科目”和“分类”列。幼升小没有册别目录时使用默认学期 `全册`。不同年级建议使用独立的 `output_root`。
