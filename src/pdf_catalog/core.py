@@ -16,7 +16,7 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
 LOG = logging.getLogger(__name__)
-HEADERS = ["序号", "年级", "学期", "科目", "分类", "PDF 文件名称", "生成文案", "封面图链接", *[f"图 {i}" for i in range(1, 6)]]
+HEADERS = ["序号", "年级", "学期", "科目", "分类", "PDF 文件名称", "生成文案", "封面图链接", *[f"图 {i}" for i in range(1, 6)], "操作"]
 
 @dataclass
 class Settings:
@@ -277,6 +277,24 @@ def generate_cover(settings: Settings, copy: str, name: str, category: str, grad
         return ""
     return find(data)
 
+def _status_path(settings: Settings) -> Path:
+    return settings.output_root / ".publish_status.json"
+
+def _load_publish_status(settings: Settings) -> dict[str, str]:
+    path = _status_path(settings)
+    if not path.is_file(): return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {str(k): ("已发布" if v == "已发布" else "未发布") for k, v in data.items()}
+    except (OSError, ValueError, TypeError):
+        LOG.warning("发布状态文件读取失败，将使用未发布状态: %s", path)
+        return {}
+
+def _save_publish_status(settings: Settings, statuses: dict[str, str]) -> None:
+    path = _status_path(settings); tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(statuses, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
 def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[dict[str,str]], elapsed: float, details: list[str] | None = None) -> None:
     settings.output_root.mkdir(parents=True, exist_ok=True); xlsx=settings.output_root/settings.table["xlsx"]; csvp=settings.output_root/settings.table["csv"]
     wb=Workbook(); ws=wb.active; ws.title="PDF目录"; ws.append(HEADERS); ws.freeze_panes="A2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HEADERS))}{len(rows)+1}"
@@ -337,8 +355,13 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
         def esc(value: Any) -> str:
             import html
             return html.escape(str(value or ""))
+        def copy_control(value: str) -> str:
+            return (f'<span class="copy-value">{esc(value)}</span>'
+                    f'<button class="copy-btn" type="button" data-copy="{esc(value)}" '
+                    f'onclick="copyText(this)" title="复制内容" aria-label="复制内容">⧉</button>')
         head = "".join(f"<th>{esc(h)}</th>" for h in HEADERS)
         body = []
+        statuses = _load_publish_status(settings)
         for row in rows:
             cells = []
             for h in HEADERS:
@@ -350,6 +373,11 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
                     cells.append(f'<td><button class="generate-btn" data-action="cover" data-sequence="{sequence}" onclick="generate(this)">生成封面</button></td>')
                 elif h == "生成文案" and not value:
                     cells.append(f'<td><button class="generate-btn" data-action="copy" data-sequence="{sequence}" onclick="generate(this)">生成文案</button></td>')
+                elif h in {"PDF 文件名称", "生成文案"}:
+                    cells.append(f"<td>{copy_control(value)}</td>")
+                elif h == "操作":
+                    status = statuses.get(str(row.get("序号", "")), "未发布")
+                    cells.append(f'<td><button class="status-btn {"published" if status == "已发布" else "unpublished"}" data-sequence="{sequence}" data-status="{status}" onclick="toggleStatus(this)">{status}</button></td>')
                 elif h.startswith("图") and value:
                     # 单页表格中直接显示缩略图，不展示图片路径链接；点击缩略图可打开原图。
                     cells.append(f'<td><a href="{esc(value)}" target="_blank"><img src="{esc(value)}" alt="{esc(h)}" loading="lazy"></a></td>')
@@ -360,11 +388,21 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
 <html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
 <title>PDF 目录</title><style>
 body{font-family:Arial,\"Microsoft YaHei\",sans-serif;margin:20px;color:#222}h1{font-size:22px}#search{width: min(520px,100%);padding:9px 12px;border:1px solid #bbb;border-radius:6px;margin:0 0 14px;font-size:14px}
-.table-wrap{overflow:auto;border:1px solid #ddd}table{border-collapse:collapse;width:100%;min-width:1500px;font-size:13px}th,td{border:1px solid #ddd;padding:7px;vertical-align:top;line-height:1.4}th{position:sticky;top:0;background:#f3f5f7;white-space:nowrap}td img{max-width:90px;max-height:120px;margin-top:4px}a{color:#1769aa;word-break:break-all}th:nth-child(7),td:nth-child(7){width:260px;min-width:180px;max-width:300px;white-space:normal;overflow-wrap:anywhere}.generate-btn{padding:6px 10px;border:1px solid #1769aa;border-radius:5px;background:#fff;color:#1769aa;cursor:pointer;white-space:nowrap}.generate-btn:disabled{opacity:.55;cursor:wait}.notice{color:#777;font-size:12px;margin:-6px 0 14px}
+.table-wrap{overflow:auto;border:1px solid #ddd}table{border-collapse:collapse;width:100%;min-width:1500px;font-size:13px}th,td{border:1px solid #ddd;padding:7px;vertical-align:top;line-height:1.4}th{position:sticky;top:0;background:#f3f5f7;white-space:nowrap}td img{max-width:90px;max-height:120px;margin-top:4px}a{color:#1769aa;word-break:break-all}th:nth-child(7),td:nth-child(7){width:260px;min-width:180px;max-width:300px;white-space:normal;overflow-wrap:anywhere}.generate-btn,.copy-btn,.page-btn,.status-btn{padding:6px 10px;border:1px solid #1769aa;border-radius:5px;background:#fff;color:#1769aa;cursor:pointer;white-space:nowrap}.generate-btn:disabled,.page-btn:disabled,.status-btn:disabled{opacity:.55;cursor:wait}.copy-btn{padding:1px 5px;margin-top: 2px;font-size:14px;line-height:1.1;vertical-align:middle;border: 0;}.copy-btn:hover,.page-btn:not(:disabled):hover{background:#eaf4ff}.status-btn.published{border-color:#299447;color:#207a39;background:#effaf1}.status-btn.unpublished{border-color:#999;color:#666;background:#fafafa}.notice{color:#777;font-size:12px;margin:-6px 0 14px}.pagination{display:flex;align-items:center;justify-content:center;gap:12px;padding:14px}.page-info{color:#666;font-size:13px}.toast{position:fixed;left:50%;top:24px;transform:translateX(-50%);background:#333;color:#fff;padding:9px 16px;border-radius:5px;z-index:10;opacity:0;transition:opacity .2s}.toast.show{opacity:1}
 @media print{#search{display:none}.table-wrap{overflow:visible;border:0}table{min-width:0;font-size:8px}th{position:static}td img{max-width:45px;max-height:60px}}
-</style></head><body><h1>PDF 目录（单页表格）</h1><p class=\"notice\">缺少封面图或文案时，可点击对应按钮生成。首次使用请在项目目录运行：<code>pdf-catalog serve --config config.yaml</code></p><input id=\"search\" placeholder=\"输入关键词筛选…\" oninput=\"filterRows()\"><div class=\"table-wrap\"><table><thead><tr>""" + head + """</tr></thead><tbody id=\"rows\">""" + "".join(body) + """</tbody></table></div><script>
+</style></head><body><h1>PDF 目录（分页表格）</h1><p class=\"notice\">每页显示 50 条。缺少封面图或文案时，可点击对应按钮生成。首次使用请在项目目录运行：<code>pdf-catalog serve --config config.yaml</code></p><div id=\"toast\" class=\"toast\" role=\"status\"></div><input id=\"search\" placeholder=\"输入关键词筛选…\" oninput=\"filterRows()\"><div class=\"table-wrap\"><table><thead><tr>""" + head + """</tr></thead><tbody id=\"rows\">""" + "".join(body) + """</tbody></table></div><div class=\"pagination\"><button id=\"prev-page\" class=\"page-btn\" type=\"button\" onclick=\"changePage(-1)\">上一页</button><span id=\"page-info\" class=\"page-info\"></span><button id=\"next-page\" class=\"page-btn\" type=\"button\" onclick=\"changePage(1)\">下一页</button></div><script>
 const API_BASE='http://127.0.0.1:8765';
-function filterRows(){const q=document.getElementById('search').value.toLowerCase();document.querySelectorAll('#rows tr').forEach(r=>r.style.display=r.innerText.toLowerCase().includes(q)?'':'none')}
+let currentPage=1;const pageSize=50;
+function filteredRows(){const q=document.getElementById('search').value.toLowerCase();return [...document.querySelectorAll('#rows tr')].filter(r=>r.innerText.toLowerCase().includes(q))}
+function renderPage(){const matched=filteredRows(), totalPages=Math.max(1,Math.ceil(matched.length/pageSize));currentPage=Math.min(currentPage,totalPages);const start=(currentPage-1)*pageSize;const selected=new Set(matched.slice(start,start+pageSize));document.querySelectorAll('#rows tr').forEach(r=>r.style.display=selected.has(r)?'':'none');document.getElementById('page-info').textContent=`第 ${currentPage} / ${totalPages} 页（共 ${matched.length} 条）`;document.getElementById('prev-page').disabled=currentPage<=1;document.getElementById('next-page').disabled=currentPage>=totalPages}
+function changePage(delta){currentPage+=delta;renderPage()}
+function filterRows(){currentPage=1;renderPage()}
+async function toggleStatus(button){const oldStatus=button.dataset.status;const status=oldStatus==='已发布'?'未发布':'已发布';button.disabled=true;try{const response=await fetch(API_BASE+'/api/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sequence:button.dataset.sequence,status})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'状态保存失败');button.dataset.status=status;button.textContent=status;button.classList.toggle('published',status==='已发布');button.classList.toggle('unpublished',status==='未发布');showToast(status)}catch(error){showToast(error.message)}finally{button.disabled=false}}
+function showToast(message){const toast=document.getElementById('toast');toast.textContent=message;toast.classList.add('show');clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>toast.classList.remove('show'),1800)}
+async function copyText(button){const value=button.dataset.copy||'';try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(value)}else{const area=document.createElement('textarea');area.value=value;area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.focus();area.select();document.execCommand('copy');area.remove()}showToast('复制成功')}catch(error){showToast('复制失败，请手动复制')}}
+generate=async function(button){const action=button.dataset.action,sequence=button.dataset.sequence;button.disabled=true;button.textContent='生成中…';try{const response=await fetch(API_BASE+'/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,sequence})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'生成失败');const cell=button.closest('td');if(action==='copy'){setCopyCell(cell,result.value)}else{cell.innerHTML='<a href="'+result.value+'" target="_blank">'+result.value+'</a><br><img src="'+result.value+'" alt="封面">'}}catch(error){button.disabled=false;button.textContent=action==='copy'?'生成文案':'生成封面';alert(error.message+'\\n请确认已启动 pdf-catalog serve，并检查 AI 配置。')}};
+function setCopyCell(cell,value){cell.innerHTML='<span class="copy-value"></span><button class="copy-btn" type="button" title="复制内容" aria-label="复制内容" onclick="copyText(this)">⧉</button>';cell.querySelector('.copy-value').textContent=value;cell.querySelector('.copy-btn').dataset.copy=value}
+renderPage();
 async function generate(button){const action=button.dataset.action, sequence=button.dataset.sequence;button.disabled=true;button.textContent='生成中…';try{const response=await fetch(API_BASE+'/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,sequence})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'生成失败');const cell=button.closest('td');if(action==='copy'){cell.textContent=result.value}else{cell.innerHTML='<a href="'+result.value+'" target="_blank">'+result.value+'</a><br><img src="'+result.value+'" alt="封面">'}}catch(error){button.disabled=false;button.textContent=action==='copy'?'生成文案':'生成封面';alert(error.message+'\\n请确认已启动 pdf-catalog serve，并检查 AI 配置。')}}</script></body></html>""", encoding="utf-8")
         # errors 按处理阶段记录；同一 PDF 可能同时在文案、封面等阶段失败。
         # 汇总时按 PDF 路径去重，避免一个 PDF 的多条错误导致成功数变成负数。
@@ -468,10 +506,20 @@ def serve(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> None
             self.send_header("Access-Control-Allow-Headers", "Content-Type"); self.end_headers()
 
         def do_POST(self):
-            if self.path != "/api/generate": self._json(404, {"ok": False, "error": "接口不存在"}); return
+            if self.path not in {"/api/generate", "/api/status"}:
+                self._json(404, {"ok": False, "error": "接口不存在"}); return
             try:
                 length = int(self.headers.get("Content-Length", "0")); request = json.loads(self.rfile.read(length))
                 with generation_lock:
+                    if self.path == "/api/status":
+                        sequence = int(request.get("sequence")); status = request.get("status")
+                        if sequence < 1 or status not in {"已发布", "未发布"}: raise ValueError("参数错误")
+                        statuses = _load_publish_status(settings); statuses[str(sequence)] = status
+                        _save_publish_status(settings, statuses)
+                        csv_path = output_root / settings.table["csv"]
+                        with csv_path.open(encoding="utf-8-sig", newline="") as f: rows = list(csv.DictReader(f))
+                        write_tables(rows, settings, [], 0, [f"HTML 按钮切换发布状态: 序号 {sequence} -> {status}"])
+                        self._json(200, {"ok": True, "status": status}); return
                     action, sequence = request.get("action"), int(request.get("sequence"))
                     if action not in {"copy", "cover"} or sequence < 1: raise ValueError("参数错误")
                     pdfs = discover(settings.source_root)
