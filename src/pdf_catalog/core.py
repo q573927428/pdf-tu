@@ -37,7 +37,7 @@ def load_settings(path: str | Path) -> Settings:
     if wm["position"] not in {"bottom_right", "bottom_left", "center"}: raise ValueError("watermark.position 不支持")
     wm["opacity"] = max(0, min(255, int(wm["opacity"])))
     table = {"xlsx": "pdf_catalog.xlsx", "csv": "pdf_catalog.csv", "include_metadata_title": False, **raw.get("table", {})}
-    ai = {"enabled": False, "endpoint": "https://ark.cn-beijing.volces.com/api/v3", "api_key": "", "model": "", "generate_copy": False, "generate_cover": False, "timeout": 60, **raw.get("ai", {})}
+    ai = {"enabled": False, "endpoint": "https://ark.cn-beijing.volces.com/api/v3", "api_key": "", "model": "", "copy_model": "", "image_model": "", "generate_copy": False, "generate_cover": False, "timeout": 60, **raw.get("ai", {})}
     return Settings(source, out, str(req("grade")), str(req("semester")), wm, render, {"max_pdfs": None, **raw.get("processing", {})}, table, ai)
 
 def discover(root: Path) -> list[Path]:
@@ -93,14 +93,16 @@ def process_pdf(pdf: Path, settings: Settings, sequence: int, watermark=True) ->
 
 def _doubao(settings: Settings, messages: list[dict[str, str]], *, image=False) -> Any:
     """调用豆包 Ark 的 OpenAI 兼容接口；未配置时明确报错。"""
-    if not settings.ai.get("enabled") or not settings.ai.get("api_key") or not settings.ai.get("model"):
-        raise RuntimeError("未配置 ai.enabled、ai.api_key 或 ai.model")
+    model_key = "image_model" if image else "copy_model"
+    model = settings.ai.get(model_key) or settings.ai.get("model")
+    if not settings.ai.get("enabled") or not settings.ai.get("api_key") or not model:
+        raise RuntimeError(f"未配置 ai.enabled、ai.api_key 或 ai.{model_key}（也可使用兼容字段 ai.model）")
     if image:
-        endpoint = str(settings.ai.get("image_endpoint") or settings.ai.get("endpoint", "")).rstrip("/") + "/images/generations"
-        payload = {"model": settings.ai["model"], "prompt": messages[-1].get("content", ""), "size": settings.ai.get("image_size", "1024x1536"), "n": 1}
+        endpoint = str(settings.ai.get("endpoint", "")).rstrip("/") + "/images/generations"
+        payload = {"model": model, "prompt": messages[-1].get("content", ""), "size": settings.ai.get("image_size", "1024x1536"), "n": 1}
     else:
         endpoint = str(settings.ai.get("endpoint", "")).rstrip("/") + "/chat/completions"
-        payload = {"model": settings.ai["model"], "messages": messages}
+        payload = {"model": model, "messages": messages}
     req = urllib.request.Request(endpoint, data=json.dumps(payload, ensure_ascii=False).encode(), headers={"Authorization": "Bearer " + settings.ai["api_key"], "Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=float(settings.ai.get("timeout", 60))) as res:
         return json.loads(res.read().decode("utf-8"))

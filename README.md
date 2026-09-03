@@ -35,7 +35,7 @@ pdf-catalog run --config config.yaml --ai-start 11 --ai-end 20 --generate-copy -
 pdf-catalog ai --config config.yaml --start 1 --end 10 --generate-copy
 ```
 
-表格新增“生成文案”和“封面图链接”两列。豆包接口采用 Ark 的 OpenAI 兼容 `chat/completions` 地址，配置 `ai.enabled/api_key/model` 后再显式传入生成参数；`--ai-start/--ai-end/--ai-limit` 只约束 AI 生成范围，`--start/--end` 约束本次扫描范围。
+表格新增“生成文案”和“封面图链接”两列。豆包接口采用 Ark 的 OpenAI 兼容地址，配置 `ai.enabled/api_key`，并分别设置 `copy_model`（文本模型）和 `image_model`（图片生成模型，如 Seedream）后再显式传入生成参数；两者留空时会兼容使用旧的 `ai.model`。文案和封面图共用同一个基础 `endpoint`，但分别访问 `/chat/completions` 和 `/images/generations`。`--ai-start/--ai-end/--ai-limit` 只约束 AI 生成范围，`--start/--end` 约束本次扫描范围。
 
 前期测试可在配置中将 `processing.max_pdfs` 设为 `20`，或临时执行 `pdf-catalog run --config config.yaml --limit 5`；正式全量运行时设置为 `null` 或使用 `--limit none`。
 
