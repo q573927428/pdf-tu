@@ -43,6 +43,8 @@ pdf-catalog ai --config config.yaml --start 1 --end 10 --generate-copy
 
 命令已实现，运行后会在 `output/` 生成 `images/`、`pdf_catalog.xlsx`、`pdf_catalog.csv`、`errors.csv` 和 `run.log`。图片路径相对于输出目录，重复运行时会根据源文件属性、渲染参数和水印配置复用缓存。损坏或加密 PDF 会记录到 `errors.csv`，不会中断批次。
 
+同时会生成 `pdf_catalog.html` 单页表格，可直接用浏览器打开；支持关键词筛选、图片预览、链接跳转和打印（打印时自动收缩表格）。如需修改文件名，可在 `table.html` 配置项中覆盖默认值。
+
 也可以直接从源码运行：
 
 ```powershell

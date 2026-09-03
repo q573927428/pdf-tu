@@ -15,7 +15,7 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
 LOG = logging.getLogger(__name__)
-HEADERS = ["年级", "学期", "科目", "分类", "PDF 文件名称", "PDF 文件所在位置", "生成文案", "封面图链接", *[f"转换后的图片 {i}" for i in range(1, 6)]]
+HEADERS = ["序号", "年级", "学期", "科目", "分类", "PDF 文件名称", "生成文案", "封面图链接", *[f"图 {i}" for i in range(1, 6)]]
 
 @dataclass
 class Settings:
@@ -31,9 +31,11 @@ def load_settings(path: str | Path) -> Settings:
     if not source.is_absolute(): source = (p.parent / source).resolve()
     out = Path(req("output_root")).expanduser()
     if not out.is_absolute(): out = (p.parent / out).resolve()
-    render = {"dpi": 150, "max_pages": 5, **raw.get("render", {})}
+    render = {"dpi": 150, "max_pages": 5, "max_width": None, "max_height": None, "output_width": None, "png_optimize": True, **raw.get("render", {})}
     if not (1 <= int(render["dpi"]) <= 1200): raise ValueError("render.dpi 必须在 1~1200")
     if not (1 <= int(render["max_pages"]) <= 100): raise ValueError("render.max_pages 必须在 1~100")
+    for key in ("max_width", "max_height", "output_width"):
+        if render.get(key) is not None and int(render[key]) < 1: raise ValueError(f"render.{key} 必须为正整数或 null")
     wm = {"enabled": True, "text": "幼升小", "opacity": 90, "position": "bottom_right", "font_size": 28, **raw.get("watermark", {})}
     if wm["position"] not in {"bottom_right", "bottom_left", "center"}: raise ValueError("watermark.position 不支持")
     wm["opacity"] = max(0, min(255, int(wm["opacity"])))
@@ -105,7 +107,17 @@ def process_pdf(pdf: Path, settings: Settings, sequence: int, watermark=True) ->
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             if watermark and settings.watermark.get("enabled") and settings.watermark.get("text"):
                 layer=Image.new("RGBA", img.size, (0,0,0,0)); d=ImageDraw.Draw(layer); f=_font(int(settings.watermark["font_size"])); box=d.textbbox((0,0), settings.watermark["text"], font=f); w,h=box[2]-box[0],box[3]-box[1]; margin=max(1,int(min(img.size)*.03)); pos={"bottom_right":(img.width-w-margin,img.height-h-margin),"bottom_left":(margin,img.height-h-margin),"center":((img.width-w)//2,(img.height-h)//2)}[settings.watermark["position"]]; d.text(pos, settings.watermark["text"], font=f, fill=(255,0,0,int(settings.watermark["opacity"]))) ; img=Image.alpha_composite(img.convert("RGBA"),layer).convert("RGB")
-            tmp=out.with_suffix(".tmp.png"); img.save(tmp, "PNG"); os.replace(tmp,out); paths.append(str(out.relative_to(settings.output_root)).replace(os.sep,"/"))
+            # output_width 为固定宽度并按比例自动计算高度；否则按 max_width/max_height 等比限制。
+            ow, mw, mh = settings.render.get("output_width"), settings.render.get("max_width"), settings.render.get("max_height")
+            target = None
+            if ow:
+                target = (int(ow), max(1, round(img.height * int(ow) / img.width)))
+            else:
+                scale = min((int(mw) / img.width) if mw else 1.0, (int(mh) / img.height) if mh else 1.0, 1.0)
+                if scale < 1:
+                    target = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
+            if target: img = img.resize(target, Image.Resampling.LANCZOS)
+            tmp=out.with_suffix(".tmp.png"); img.save(tmp, "PNG", optimize=bool(settings.render.get("png_optimize", True))); os.replace(tmp,out); paths.append(str(out.relative_to(settings.output_root)).replace(os.sep,"/"))
         marker.write_text(fp, encoding="ascii"); doc.close(); return title, paths, None
     except Exception as exc:
         return pdf.stem, [], f"{type(exc).__name__}: {exc}"
@@ -286,6 +298,25 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
             ws.row_dimensions[row_idx].height = max(ws.row_dimensions[row_idx].height or 15, image.height * 0.75)
         except Exception as exc:
             LOG.warning("封面图片嵌入 Excel 失败: %s (%s)", image_path, exc)
+        # 转换后的图片列直接嵌入缩略图，不在单元格中显示路径文字。
+    for row_idx, row in enumerate(rows, start=2):
+        for offset, h in enumerate(HEADERS[8:], start=9):
+            value = str(row.get(h) or "")
+            if not value:
+                continue
+            image_path = settings.output_root / value
+            if not image_path.is_file():
+                continue
+            try:
+                image = XLImage(str(image_path))
+                original_width, original_height = image.width, image.height
+                image.width = 110
+                image.height = int(110 * original_height / original_width) if original_width else 85
+                ws.cell(row=row_idx, column=offset).value = ""
+                ws.add_image(image, f"{get_column_letter(offset)}{row_idx}")
+                ws.row_dimensions[row_idx].height = max(ws.row_dimensions[row_idx].height or 15, image.height * 0.75)
+            except Exception as exc:
+                LOG.warning("页面图片嵌入 Excel 失败: %s (%s)", image_path, exc)
     for col in range(1,len(HEADERS)+1): ws.column_dimensions[get_column_letter(col)].width = 22 if col<4 else 48
     for row in ws.iter_rows(min_row=2):
         for cell in row: cell.alignment=Alignment(vertical="top", wrap_text=True)
@@ -293,6 +324,33 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
         wb.save(xlsx)
         with csvp.open("w", newline="", encoding="utf-8-sig") as f: w=csv.DictWriter(f, fieldnames=HEADERS); w.writeheader(); w.writerows(rows)
         with (settings.output_root/"errors.csv").open("w", newline="", encoding="utf-8-sig") as f: w=csv.DictWriter(f, fieldnames=["path","stage","error"]); w.writeheader(); w.writerows(errors)
+        # 生成单页 HTML 表格，便于浏览器查看、搜索和打印。
+        html_name = settings.table.get("html", "pdf_catalog.html")
+        htmlp = settings.output_root / html_name
+        def esc(value: Any) -> str:
+            import html
+            return html.escape(str(value or ""))
+        head = "".join(f"<th>{esc(h)}</th>" for h in HEADERS)
+        body = []
+        for row in rows:
+            cells = []
+            for h in HEADERS:
+                value = str(row.get(h, "") or "")
+                if h == "封面图链接" and value:
+                    cells.append(f'<td><a href="{esc(value)}">{esc(value)}</a><br><img src="{esc(value)}" alt="封面"></td>')
+                elif h.startswith("图") and value:
+                    # 单页表格中直接显示缩略图，不展示图片路径链接；点击缩略图可打开原图。
+                    cells.append(f'<td><a href="{esc(value)}" target="_blank"><img src="{esc(value)}" alt="{esc(h)}" loading="lazy"></a></td>')
+                else:
+                    cells.append(f"<td>{esc(value)}</td>")
+            body.append("<tr>" + "".join(cells) + "</tr>")
+        htmlp.write_text("""<!doctype html>
+<html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
+<title>PDF 目录</title><style>
+body{font-family:Arial,\"Microsoft YaHei\",sans-serif;margin:20px;color:#222}h1{font-size:22px}#search{width: min(520px,100%);padding:9px 12px;border:1px solid #bbb;border-radius:6px;margin:0 0 14px;font-size:14px}
+.table-wrap{overflow:auto;border:1px solid #ddd}table{border-collapse:collapse;width:100%;min-width:1500px;font-size:13px}th,td{border:1px solid #ddd;padding:7px;vertical-align:top;line-height:1.4}th{position:sticky;top:0;background:#f3f5f7;white-space:nowrap}td img{max-width:90px;max-height:120px;margin-top:4px}a{color:#1769aa;word-break:break-all}
+@media print{#search{display:none}.table-wrap{overflow:visible;border:0}table{min-width:0;font-size:8px}th{position:static}td img{max-width:45px;max-height:60px}}
+</style></head><body><h1>PDF 目录（单页表格）</h1><input id=\"search\" placeholder=\"输入关键词筛选…\" oninput=\"filterRows()\"><div class=\"table-wrap\"><table><thead><tr>""" + head + """</tr></thead><tbody id=\"rows\">""" + "".join(body) + """</tbody></table></div><script>function filterRows(){const q=document.getElementById('search').value.toLowerCase();document.querySelectorAll('#rows tr').forEach(r=>r.style.display=r.innerText.toLowerCase().includes(q)?'':'none')}</script></body></html>""", encoding="utf-8")
         # errors 按处理阶段记录；同一 PDF 可能同时在文案、封面等阶段失败。
         # 汇总时按 PDF 路径去重，避免一个 PDF 的多条错误导致成功数变成负数。
         failed_paths = {str(error.get("path", "")) for error in errors if error.get("path")}
@@ -337,7 +395,7 @@ def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_page
             LOG.info(detail)
         details.append(detail)
         semester, subject, category = directory_fields(pdf, settings)
-        row={"年级":settings.grade,"学期":semester,"科目":subject,"分类":category,"PDF 文件名称":title,"PDF 文件所在位置":str(pdf),"生成文案":"","封面图链接":""}
+        row={"序号": range_start + idx, "年级":settings.grade,"学期":semester,"科目":subject,"分类":category,"PDF 文件名称":title,"生成文案":"","封面图链接":""}
         for i,h in enumerate(HEADERS[8:]): row[h]=paths[i] if i<len(paths) else ""
         ai_index = range_start + idx
         in_ai_range = (ai_start is None or ai_index >= int(ai_start)) and (ai_end is None or ai_index <= int(ai_end))

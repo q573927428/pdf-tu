@@ -11,6 +11,11 @@ watermark:
 render:
   dpi: 150
   max_pages: 5
+  # 可选：固定宽度等比缩放（高度自动计算）；与 max_width/max_height 三选一
+  output_width: 2000
+  # max_width: 2000
+  # max_height: 3000
+  png_optimize: true
 processing:
   # 前期测试建议设置为 10~20；正式全量运行改为 null
   max_pdfs: 20
