@@ -33,6 +33,8 @@ pdf-catalog run --config config.yaml --start 11 --end 20
 pdf-catalog run --config config.yaml --ai-start 11 --ai-end 20 --generate-copy --generate-cover
 # AI 独立阶段：只生成文案，不渲染 PDF 图片
 pdf-catalog ai --config config.yaml --start 1 --end 10 --generate-copy
+# 启动本地服务，让 HTML 中的“生成文案/生成封面”按钮可以直接工作
+pdf-catalog serve --config config.yaml
 ```
 
 表格新增“生成文案”和“封面图链接”两列。豆包接口采用 Ark 的 OpenAI 兼容地址，配置 `ai.enabled/api_key`，并分别设置 `copy_model`（文本模型）和 `image_model`（图片生成模型，如 Seedream）后再显式传入生成参数；两者留空时会兼容使用旧的 `ai.model`。文案和封面图共用同一个基础 `endpoint`，但分别访问 `/chat/completions` 和 `/images/generations`。生成的封面会自动下载到对应 PDF 的 `output/images/.../<序号>/cover.png`；XLSX 中“封面图链接”列会直接嵌入封面缩略图，同时保留本地相对路径。`--ai-start/--ai-end/--ai-limit` 只约束 AI 生成范围，`--start/--end` 约束本次扫描范围。
@@ -43,7 +45,7 @@ pdf-catalog ai --config config.yaml --start 1 --end 10 --generate-copy
 
 命令已实现，运行后会在 `output/` 生成 `images/`、`pdf_catalog.xlsx`、`pdf_catalog.csv`、`errors.csv` 和 `run.log`。图片路径相对于输出目录，重复运行时会根据源文件属性、渲染参数和水印配置复用缓存。损坏或加密 PDF 会记录到 `errors.csv`，不会中断批次。
 
-同时会生成 `pdf_catalog.html` 单页表格，可直接用浏览器打开；支持关键词筛选、图片预览、链接跳转和打印（打印时自动收缩表格）。如需修改文件名，可在 `table.html` 配置项中覆盖默认值。
+同时会生成 `pdf_catalog.html` 单页表格，可直接用浏览器打开；支持关键词筛选、图片预览、链接跳转和打印（打印时自动收缩表格）。当“封面图链接”或“生成文案”为空时，HTML 对应单元格会显示按钮。先运行 `pdf-catalog serve --config config.yaml`，再打开 HTML，点击按钮即可为当前 PDF 调用 AI 并更新目录文件；服务默认监听 `127.0.0.1:8765`，可用 `--host`、`--port` 修改。如需修改 HTML 文件名，可在 `table.html` 配置项中覆盖默认值。
 
 也可以直接从源码运行：
 

@@ -1,7 +1,8 @@
 """PDF discovery, rendering and catalog output."""
 from __future__ import annotations
 
-import csv, hashlib, logging, os, re, time, shutil, json, urllib.request, urllib.parse, base64, mimetypes
+import csv, hashlib, logging, os, re, time, shutil, json, urllib.request, urllib.parse, base64, mimetypes, threading
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -342,8 +343,13 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
             cells = []
             for h in HEADERS:
                 value = str(row.get(h, "") or "")
+                sequence = esc(row.get("序号", ""))
                 if h == "封面图链接" and value:
                     cells.append(f'<td><a href="{esc(value)}">{esc(value)}</a><br><img src="{esc(value)}" alt="封面"></td>')
+                elif h == "封面图链接":
+                    cells.append(f'<td><button class="generate-btn" data-action="cover" data-sequence="{sequence}" onclick="generate(this)">生成封面</button></td>')
+                elif h == "生成文案" and not value:
+                    cells.append(f'<td><button class="generate-btn" data-action="copy" data-sequence="{sequence}" onclick="generate(this)">生成文案</button></td>')
                 elif h.startswith("图") and value:
                     # 单页表格中直接显示缩略图，不展示图片路径链接；点击缩略图可打开原图。
                     cells.append(f'<td><a href="{esc(value)}" target="_blank"><img src="{esc(value)}" alt="{esc(h)}" loading="lazy"></a></td>')
@@ -354,9 +360,12 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
 <html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
 <title>PDF 目录</title><style>
 body{font-family:Arial,\"Microsoft YaHei\",sans-serif;margin:20px;color:#222}h1{font-size:22px}#search{width: min(520px,100%);padding:9px 12px;border:1px solid #bbb;border-radius:6px;margin:0 0 14px;font-size:14px}
-.table-wrap{overflow:auto;border:1px solid #ddd}table{border-collapse:collapse;width:100%;min-width:1500px;font-size:13px}th,td{border:1px solid #ddd;padding:7px;vertical-align:top;line-height:1.4}th{position:sticky;top:0;background:#f3f5f7;white-space:nowrap}td img{max-width:90px;max-height:120px;margin-top:4px}a{color:#1769aa;word-break:break-all}th:nth-child(7),td:nth-child(7){width:260px;min-width:180px;max-width:300px;white-space:normal;overflow-wrap:anywhere}
+.table-wrap{overflow:auto;border:1px solid #ddd}table{border-collapse:collapse;width:100%;min-width:1500px;font-size:13px}th,td{border:1px solid #ddd;padding:7px;vertical-align:top;line-height:1.4}th{position:sticky;top:0;background:#f3f5f7;white-space:nowrap}td img{max-width:90px;max-height:120px;margin-top:4px}a{color:#1769aa;word-break:break-all}th:nth-child(7),td:nth-child(7){width:260px;min-width:180px;max-width:300px;white-space:normal;overflow-wrap:anywhere}.generate-btn{padding:6px 10px;border:1px solid #1769aa;border-radius:5px;background:#fff;color:#1769aa;cursor:pointer;white-space:nowrap}.generate-btn:disabled{opacity:.55;cursor:wait}.notice{color:#777;font-size:12px;margin:-6px 0 14px}
 @media print{#search{display:none}.table-wrap{overflow:visible;border:0}table{min-width:0;font-size:8px}th{position:static}td img{max-width:45px;max-height:60px}}
-</style></head><body><h1>PDF 目录（单页表格）</h1><input id=\"search\" placeholder=\"输入关键词筛选…\" oninput=\"filterRows()\"><div class=\"table-wrap\"><table><thead><tr>""" + head + """</tr></thead><tbody id=\"rows\">""" + "".join(body) + """</tbody></table></div><script>function filterRows(){const q=document.getElementById('search').value.toLowerCase();document.querySelectorAll('#rows tr').forEach(r=>r.style.display=r.innerText.toLowerCase().includes(q)?'':'none')}</script></body></html>""", encoding="utf-8")
+</style></head><body><h1>PDF 目录（单页表格）</h1><p class=\"notice\">缺少封面图或文案时，可点击对应按钮生成。首次使用请在项目目录运行：<code>pdf-catalog serve --config config.yaml</code></p><input id=\"search\" placeholder=\"输入关键词筛选…\" oninput=\"filterRows()\"><div class=\"table-wrap\"><table><thead><tr>""" + head + """</tr></thead><tbody id=\"rows\">""" + "".join(body) + """</tbody></table></div><script>
+const API_BASE='http://127.0.0.1:8765';
+function filterRows(){const q=document.getElementById('search').value.toLowerCase();document.querySelectorAll('#rows tr').forEach(r=>r.style.display=r.innerText.toLowerCase().includes(q)?'':'none')}
+async function generate(button){const action=button.dataset.action, sequence=button.dataset.sequence;button.disabled=true;button.textContent='生成中…';try{const response=await fetch(API_BASE+'/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,sequence})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'生成失败');const cell=button.closest('td');if(action==='copy'){cell.textContent=result.value}else{cell.innerHTML='<a href="'+result.value+'" target="_blank">'+result.value+'</a><br><img src="'+result.value+'" alt="封面">'}}catch(error){button.disabled=false;button.textContent=action==='copy'?'生成文案':'生成封面';alert(error.message+'\\n请确认已启动 pdf-catalog serve，并检查 AI 配置。')}}</script></body></html>""", encoding="utf-8")
         # errors 按处理阶段记录；同一 PDF 可能同时在文案、封面等阶段失败。
         # 汇总时按 PDF 路径去重，避免一个 PDF 的多条错误导致成功数变成负数。
         failed_paths = {str(error.get("path", "")) for error in errors if error.get("path")}
@@ -391,7 +400,7 @@ def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_page
             details.append(detail)
             continue
         if mode in {"scan", "ai"}: title, paths, err = pdf.stem, [], None
-        else: title, paths, err = process_pdf(pdf, settings, idx + 1, not no_watermark)
+        else: title, paths, err = process_pdf(pdf, settings, range_start + idx, not no_watermark)
         if err:
             errors.append({"path":str(pdf),"stage":"process","error":err})
             detail = f"[{idx + 1}/{len(files)}] 失败: {pdf} ({err})"
@@ -418,7 +427,7 @@ def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_page
                 cover_copy = row["生成文案"] or title
                 # PDF 已转换出的页面图作为服装/版式参考；有页面图时与配置的主图合并为多图输入。
                 cover_url = generate_cover(settings, cover_copy, title, category, f"{settings.grade}{subject}", paths[:5])
-                row["封面图链接"] = _download_cover(cover_url, pdf, settings, idx + 1)
+                row["封面图链接"] = _download_cover(cover_url, pdf, settings, range_start + idx)
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
                 errors.append({"path":str(pdf),"stage":"cover","error":error})
@@ -433,3 +442,62 @@ def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_page
     failed_paths = {str(error.get("path", "")) for error in errors if error.get("path")}
     failed_count = len(failed_paths)
     return {"发现数":len(files),"成功数":max(0, len(rows)-failed_count),"失败数":failed_count,"生成图片数":sum(sum(bool(r[h]) for h in HEADERS[8:]) for r in rows)}
+
+
+def serve(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> None:
+    """启动本地目录服务，为 HTML 中的生成按钮提供安全的本机接口。"""
+    output_root = settings.output_root.resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
+    # 生成过程会读写整份 CSV/HTML；串行化可避免用户同时点击多行时后写入的旧快照覆盖新结果。
+    generation_lock = threading.Lock()
+
+    class Handler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(output_root), **kwargs)
+
+        def _json(self, status: int, payload: dict[str, Any]) -> None:
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers(); self.wfile.write(data)
+
+        def do_OPTIONS(self):
+            self.send_response(204); self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type"); self.end_headers()
+
+        def do_POST(self):
+            if self.path != "/api/generate": self._json(404, {"ok": False, "error": "接口不存在"}); return
+            try:
+                length = int(self.headers.get("Content-Length", "0")); request = json.loads(self.rfile.read(length))
+                with generation_lock:
+                    action, sequence = request.get("action"), int(request.get("sequence"))
+                    if action not in {"copy", "cover"} or sequence < 1: raise ValueError("参数错误")
+                    pdfs = discover(settings.source_root)
+                    if sequence > len(pdfs): raise ValueError("找不到对应 PDF")
+                    pdf = pdfs[sequence - 1]
+                    csv_path = output_root / settings.table["csv"]
+                    with csv_path.open(encoding="utf-8-sig", newline="") as f: rows = list(csv.DictReader(f))
+                    row = next((r for r in rows if int(r.get("序号", 0)) == sequence), None)
+                    if row is None: raise ValueError("目录中找不到对应行，请先重新生成目录")
+                    if action == "copy":
+                        row["生成文案"] = generate_copy(settings, pdf.name, row.get("分类", ""), f"{settings.grade}{row.get('科目', '')}")
+                        value = row["生成文案"]
+                    else:
+                        pages = [row.get(f"图 {i}", "") for i in range(1, 6) if row.get(f"图 {i}", "")]
+                        cover_url = generate_cover(settings, row.get("生成文案", "") or row.get("PDF 文件名称", pdf.stem), row.get("PDF 文件名称", pdf.stem), row.get("分类", ""), f"{settings.grade}{row.get('科目', '')}", pages)
+                        row["封面图链接"] = _download_cover(cover_url, pdf, settings, sequence)
+                        value = row["封面图链接"]
+                    write_tables(rows, settings, [], 0, [f"HTML 按钮生成{action}: {pdf}"])
+                self._json(200, {"ok": True, "value": value})
+            except Exception as exc:
+                LOG.exception("HTML 生成请求失败")
+                self._json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+    server = ThreadingHTTPServer((host, port), Handler)
+    LOG.info("目录服务已启动: http://%s:%d/", host, port)
+    print(f"目录服务已启动，请打开 {output_root / settings.table.get('html', 'pdf_catalog.html')}")
+    try: server.serve_forever()
+    except KeyboardInterrupt: pass
+    finally: server.server_close()
