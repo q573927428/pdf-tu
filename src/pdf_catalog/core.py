@@ -316,6 +316,28 @@ def _save_publish_status(settings: Settings, statuses: dict[str, str]) -> None:
     tmp.write_text(json.dumps(statuses, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, path)
 
+def _update_status_in_html(settings: Settings, sequence: int, status: str) -> None:
+    """只更新 HTML 中指定序号的状态按钮，避免切换状态时重建大型 XLSX。"""
+    html_name = settings.table.get("html", "pdf_catalog.html")
+    html_path = settings.output_root / html_name
+    if not html_path.is_file():
+        return
+    content = html_path.read_text(encoding="utf-8")
+    sequence_text = re.escape(str(sequence))
+    status_text = re.escape(status)
+    css_class = "published" if status == "已发布" else "unpublished"
+    pattern = re.compile(
+        rf'(<button class="status-btn )(?:published|unpublished)('
+        rf'" data-sequence="{sequence_text}" data-status=")(?:已发布|未发布)('
+        rf'" onclick="toggleStatus\(this\)">)(?:已发布|未发布)(</button>)'
+    )
+    replacement = rf'\g<1>{css_class}\g<2>{status_text}\g<3>{status}\g<4>'
+    updated, count = pattern.subn(replacement, content, count=1)
+    if count:
+        html_path.write_text(updated, encoding="utf-8")
+    else:
+        LOG.warning("HTML 中未找到序号 %s 的发布状态按钮", sequence)
+
 def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[dict[str,str]], elapsed: float, details: list[str] | None = None) -> None:
     settings.output_root.mkdir(parents=True, exist_ok=True); xlsx=settings.output_root/settings.table["xlsx"]; csvp=settings.output_root/settings.table["csv"]
     wb=Workbook(); ws=wb.active; ws.title="PDF目录"; ws.append(HEADERS); ws.freeze_panes="A2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HEADERS))}{len(rows)+1}"
@@ -545,9 +567,7 @@ def serve(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> None
                         if sequence < 1 or status not in {"已发布", "未发布"}: raise ValueError("参数错误")
                         statuses = _load_publish_status(settings); statuses[str(sequence)] = status
                         _save_publish_status(settings, statuses)
-                        csv_path = output_root / settings.table["csv"]
-                        with csv_path.open(encoding="utf-8-sig", newline="") as f: rows = list(csv.DictReader(f))
-                        write_tables(rows, settings, [], 0, [f"HTML 按钮切换发布状态: 序号 {sequence} -> {status}"])
+                        _update_status_in_html(settings, sequence, status)
                         self._json(200, {"ok": True, "status": status}); return
                     action, sequence = request.get("action"), int(request.get("sequence"))
                     if action not in {"copy", "cover"} or sequence < 1: raise ValueError("参数错误")
