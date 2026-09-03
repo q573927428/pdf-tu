@@ -227,7 +227,7 @@ COPY_FORBIDDEN_TERMS = (
 
 def _copy_prompt(filename: str, category: str, grade_subject: str) -> str:
     return f"""【角色】你是一位熟悉《广告法》及抖音、小红书内容审核规范的教辅资料营销文案专家。文案必须合规、真实、正向，同时保留适度紧迫感和行动感，让宝妈想保存、想打印。
-【任务】根据【文件名】【资料类型】【年级科目】，生成一条不超过100字（含标点）的营销文案。
+【任务】根据【文件名】【资料类型】【年级科目】，生成一条不超过150字（含标点）的营销文案。
 【输入】文件名：{filename}；资料类型：{category or '学习资料'}；年级科目：{grade_subject}
 {COPY_RED_LINES}
 【写作要求】口语化、有画面感，像懂行的学姐/老师提醒宝妈；紧迫感使用真实时间节点+轻行动建议，不靠恐吓；开头点明场景/痛点，中间说明资料覆盖内容和帮助，结尾使用一个轻行动指令（打印、保存、每天练一页）；必须紧扣文件名具体内容，避免通用套话；可用感叹号、省略号，emoji不超过1个。
@@ -243,7 +243,7 @@ def generate_copy(settings: Settings, filename: str, category: str, grade_subjec
     result = result.strip("`\"“”")
     for term in COPY_FORBIDDEN_TERMS:
         result = result.replace(term, "")
-    return result[:100]
+    return result[:150]
 
 def generate_cover(settings: Settings, copy: str, name: str, category: str, grade_subject: str, page_images: list[str] | None = None) -> str:
     prompt = f"""【角色】你是一位儿童教辅类学习资料封面设计师，擅长为宝妈群体设计温暖、干净、有手账感的竖版封面。
