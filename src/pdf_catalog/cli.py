@@ -7,10 +7,17 @@ from .core import load_settings, run
 def main() -> None:
     parser = argparse.ArgumentParser(prog="pdf-catalog", description="扫描 PDF 并生成目录")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("scan", "convert", "run"):
+    for name in ("scan", "convert", "run", "ai"):
         p = sub.add_parser(name)
         p.add_argument("--config", required=True)
         p.add_argument("--limit", default=None, help="数量或 none")
+        p.add_argument("--start", "--start-index", dest="start", type=int, default=1, help="扫描起始序号（从1开始，包含）")
+        p.add_argument("--end", "--end-index", dest="end", type=int, help="扫描结束序号（包含）")
+        p.add_argument("--ai-start", "--generate-start", dest="ai_start", type=int, help="AI生成起始序号（从1开始）")
+        p.add_argument("--ai-end", "--generate-end", dest="ai_end", type=int, help="AI生成结束序号（包含）")
+        p.add_argument("--ai-limit", "--generate-count", dest="ai_limit", type=int, help="AI生成最多数量")
+        p.add_argument("--generate-copy", action="store_true", help="调用豆包生成营销文案")
+        p.add_argument("--generate-cover", action="store_true", help="调用豆包生成封面图并写入链接")
         p.add_argument("--no-watermark", action="store_true")
         p.add_argument("--max-pages", type=int)
         p.add_argument("--dry-run", action="store_true")
@@ -23,7 +30,8 @@ def main() -> None:
         settings = load_settings(args.config)
         if args.max_pages is not None: settings.render["max_pages"] = args.max_pages
         limit = None if args.limit in (None, "none", "None") else int(args.limit)
-        stats = run(settings, args.command, limit, args.no_watermark, args.max_pages, args.dry_run)
+        generate_copy = args.generate_copy or args.command == "ai"
+        stats = run(settings, args.command, limit, args.no_watermark, args.max_pages, args.dry_run, args.start, args.end, args.ai_start, args.ai_end, args.ai_limit, generate_copy, args.generate_cover)
         print("; ".join(f"{k}: {v}" for k, v in stats.items()))
     except Exception as exc:
         parser.error(str(exc))

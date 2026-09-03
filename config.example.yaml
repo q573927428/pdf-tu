@@ -18,3 +18,14 @@ table:
   xlsx: "pdf_catalog.xlsx"
   csv: "pdf_catalog.csv"
   include_metadata_title: false
+# 豆包 Ark（OpenAI 兼容接口）。默认关闭；开启后使用 --generate-copy/--generate-cover。
+ai:
+  enabled: false
+  endpoint: "https://ark.cn-beijing.volces.com/api/v3"
+  image_endpoint: ""
+  api_key: ""
+  model: ""
+  generate_copy: false
+  generate_cover: false
+  timeout: 60
+  image_size: "1024x1536"
