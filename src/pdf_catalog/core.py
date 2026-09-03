@@ -1,7 +1,7 @@
 """PDF discovery, rendering and catalog output."""
 from __future__ import annotations
 
-import csv, hashlib, logging, os, re, time, shutil, json, urllib.request
+import csv, hashlib, logging, os, re, time, shutil, json, urllib.request, base64, mimetypes
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -37,7 +37,12 @@ def load_settings(path: str | Path) -> Settings:
     if wm["position"] not in {"bottom_right", "bottom_left", "center"}: raise ValueError("watermark.position 不支持")
     wm["opacity"] = max(0, min(255, int(wm["opacity"])))
     table = {"xlsx": "pdf_catalog.xlsx", "csv": "pdf_catalog.csv", "include_metadata_title": False, **raw.get("table", {})}
-    ai = {"enabled": False, "endpoint": "https://ark.cn-beijing.volces.com/api/v3", "api_key": "", "model": "", "copy_model": "", "image_model": "", "generate_copy": False, "generate_cover": False, "timeout": 60, **raw.get("ai", {})}
+    ai = {"enabled": False, "endpoint": "https://ark.cn-beijing.volces.com/api/v3", "api_key": "", "model": "", "copy_model": "", "image_model": "", "reference_image": "", "generate_copy": False, "generate_cover": False, "timeout": 60, **raw.get("ai", {})}
+    reference_image = str(ai.get("reference_image") or "").strip()
+    if reference_image and not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", reference_image):
+        ref_path = Path(reference_image).expanduser()
+        if not ref_path.is_absolute():
+            ai["reference_image"] = str((p.parent / ref_path).resolve())
     return Settings(source, out, str(req("grade")), str(req("semester")), wm, render, {"max_pdfs": None, **raw.get("processing", {})}, table, ai)
 
 def discover(root: Path) -> list[Path]:
@@ -100,6 +105,14 @@ def _doubao(settings: Settings, messages: list[dict[str, str]], *, image=False) 
     if image:
         endpoint = str(settings.ai.get("endpoint", "")).rstrip("/") + "/images/generations"
         payload = {"model": model, "prompt": messages[-1].get("content", ""), "size": settings.ai.get("image_size", "1024x1536"), "n": 1}
+        reference_image = str(settings.ai.get("reference_image") or "").strip()
+        if reference_image:
+            reference_path = Path(reference_image).expanduser()
+            if reference_path.is_file():
+                mime = mimetypes.guess_type(reference_path.name)[0] or "application/octet-stream"
+                encoded = base64.b64encode(reference_path.read_bytes()).decode("ascii")
+                reference_image = f"data:{mime};base64,{encoded}"
+            payload["image"] = reference_image
     else:
         endpoint = str(settings.ai.get("endpoint", "")).rstrip("/") + "/chat/completions"
         payload = {"model": model, "messages": messages}

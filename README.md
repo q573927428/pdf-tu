@@ -37,6 +37,8 @@ pdf-catalog ai --config config.yaml --start 1 --end 10 --generate-copy
 
 表格新增“生成文案”和“封面图链接”两列。豆包接口采用 Ark 的 OpenAI 兼容地址，配置 `ai.enabled/api_key`，并分别设置 `copy_model`（文本模型）和 `image_model`（图片生成模型，如 Seedream）后再显式传入生成参数；两者留空时会兼容使用旧的 `ai.model`。文案和封面图共用同一个基础 `endpoint`，但分别访问 `/chat/completions` 和 `/images/generations`。`--ai-start/--ai-end/--ai-limit` 只约束 AI 生成范围，`--start/--end` 约束本次扫描范围。
 
+项目根目录提供 `static/` 静态资源目录。生成封面时可在 `ai.reference_image` 填写参考图 URL，或填写本地路径（例如 `./static/reference.png`）；程序会将其作为图片生成接口的 `image` 参数，实现图文生图/参考图编辑。留空则按纯文生图处理。
+
 前期测试可在配置中将 `processing.max_pdfs` 设为 `20`，或临时执行 `pdf-catalog run --config config.yaml --limit 5`；正式全量运行时设置为 `null` 或使用 `--limit none`。
 
 命令已实现，运行后会在 `output/` 生成 `images/`、`pdf_catalog.xlsx`、`pdf_catalog.csv`、`errors.csv` 和 `run.log`。图片路径相对于输出目录，重复运行时会根据源文件属性、渲染参数和水印配置复用缓存。损坏或加密 PDF 会记录到 `errors.csv`，不会中断批次。

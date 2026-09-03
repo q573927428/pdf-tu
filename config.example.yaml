@@ -26,6 +26,7 @@ ai:
   model: "" # 兼容旧配置：未单独指定时，文案和图片共用此模型
   copy_model: "" # 文案模型接入点 ID；留空则使用 model
   image_model: "" # 图片生成模型接入点 ID（如 Seedream）；留空则使用 model
+  reference_image: "" # 可选：封面参考图 URL 或本地路径（如 ./static/reference.png）；留空则使用纯文生图
   generate_copy: false # 是否在运行时自动生成营销文案
   generate_cover: false # 是否在运行时自动生成封面图链接
   timeout: 60 # API 请求超时时间（秒）
