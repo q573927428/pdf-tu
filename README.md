@@ -22,22 +22,22 @@ python -m pip install -e . --no-build-isolation
 
 ```powershell
 # 仅扫描 PDF，生成目录表格，暂不转换图片
-pdf-catalog scan --config config.example.yaml
+pdf-catalog scan --config config.yaml
 # 将 PDF 页面转换为图片，并更新目录表格
-pdf-catalog convert --config config.example.yaml
+pdf-catalog convert --config config.yaml
 # 执行完整流程：扫描 PDF、转换图片并输出目录表格
-pdf-catalog run --config config.example.yaml
+pdf-catalog run --config config.yaml
 # 仅处理第 11~20 个 PDF（序号按稳定排序，从 1 开始，包含首尾）
-pdf-catalog run --config config.example.yaml --start 11 --end 20
+pdf-catalog run --config config.yaml --start 11 --end 20
 # 仅为第 11~20 个 PDF 生成文案和封面（需先配置豆包 API）
-pdf-catalog run --config config.example.yaml --ai-start 11 --ai-end 20 --generate-copy --generate-cover
+pdf-catalog run --config config.yaml --ai-start 11 --ai-end 20 --generate-copy --generate-cover
 # AI 独立阶段：只生成文案，不渲染 PDF 图片
-pdf-catalog ai --config config.example.yaml --start 1 --end 10 --generate-copy
+pdf-catalog ai --config config.yaml --start 1 --end 10 --generate-copy
 ```
 
 表格新增“生成文案”和“封面图链接”两列。豆包接口采用 Ark 的 OpenAI 兼容 `chat/completions` 地址，配置 `ai.enabled/api_key/model` 后再显式传入生成参数；`--ai-start/--ai-end/--ai-limit` 只约束 AI 生成范围，`--start/--end` 约束本次扫描范围。
 
-前期测试可在配置中将 `processing.max_pdfs` 设为 `20`，或临时执行 `pdf-catalog run --config config.example.yaml --limit 5`；正式全量运行时设置为 `null` 或使用 `--limit none`。
+前期测试可在配置中将 `processing.max_pdfs` 设为 `20`，或临时执行 `pdf-catalog run --config config.yaml --limit 5`；正式全量运行时设置为 `null` 或使用 `--limit none`。
 
 命令已实现，运行后会在 `output/` 生成 `images/`、`pdf_catalog.xlsx`、`pdf_catalog.csv`、`errors.csv` 和 `run.log`。图片路径相对于输出目录，重复运行时会根据源文件属性、渲染参数和水印配置复用缓存。损坏或加密 PDF 会记录到 `errors.csv`，不会中断批次。
 
@@ -45,7 +45,7 @@ pdf-catalog ai --config config.example.yaml --start 1 --end 10 --generate-copy
 
 ```powershell
 $env:PYTHONPATH = "src"
-python -m pdf_catalog.cli run --config config.example.yaml --limit 5
+python -m pdf_catalog.cli run --config config.yaml --limit 5
 ```
 
 ## 切换年级
