@@ -209,7 +209,7 @@ def _doubao(settings: Settings, messages: list[dict[str, str]], *, image=False, 
 COPY_RED_LINES = """内容红线——以下一律禁止出现：
 1. 绝对化/夸大用语：最、第一、唯一、顶级、全网独家、绝无仅有、100%、满分、包过、保分、稳上、必拿A、成绩暴涨、速成、永久免费等；
 2. 承诺提分/保证效果：不得写“稳拿A”“提X分”“保证进步”，改为“帮助查漏补缺”“巩固基础”“考前更安心”；
-3. 过度贩卖焦虑：不得写“别人家孩子都会了，你家还在玩”“再不练就完了”“一步落后步步落后”等恐吓式表述；紧迫感只能用真实时间节点（如“期末复习季到了”“开学已一个月”）正向表达；
+3. 过度贩卖焦虑：不得写“别人家孩子都会了，你家还在玩”“再不练就完了”“一步落后步步落后”等恐吓式表述；紧迫感只能用真实时间节点正向表达；
 4. 虚假稀缺/诱导：不得虚构“马上删”“最后几份”“不转就没了”“免费送”等不实信息；
 5. 站外引流：不得出现加微信、私信领、点链接、群号等导流行为；
 6. 不实头衔：不得使用“官方”“内部”“绝密”“独家整理”等无法证实的表述；
@@ -271,7 +271,7 @@ def generate_cover(settings: Settings, copy: str, name: str, category: str, grad
 【固定段——背景与底部每张封面必须严格照抄，一个字都不能改】
 竖版儿童学习资料分享封面，日系治愈手账风，奶油白与浅燕麦色纸张底纹铺满背景，轻微纸纹颗粒与手绘笔触质感，雾蓝、暖粉、鹅黄三色低饱和点缀，暖色柔和光线与轻微纸张阴影，画面无水印无平台标识。
 - 底部约10%提示区：一行灰棕色手写小字（如“打印版·趁早存好”）
-- 左下角头像保护区（最高优先级）：参考图中左下角的圆形头像/徽章是不可修改的固定素材，必须原样保留；禁止重绘、替换、变形、换色、裁切、缩放、模糊或添加新元素，头像内人物、边框、颜色、文字和细节均须与参考图像素级一致。头像位置与大小保持不变，周围留出安全间距，任何标题、卡片、装饰或阴影都不得遮挡、覆盖或挤压该头像；如版式设计与头像保护冲突，优先保留头像原区域。
+- 左下角头像保护区（最高优先级）：参考图中左下角的圆形头像/徽章是不可修改的固定素材，必须原样保留。
 【顶部标题区——位置永远固定，样式与文字随文案可变】
 - 位置固定：标题始终位于画面顶部约15%高度的居中区域，标题下方保留一条鹅黄色手绘波浪下划线
 - 文字可变：标题内容从文案中提取最抓眼的一句（≤10字），随不同文案变化
@@ -563,7 +563,12 @@ def serve(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> None
                         value = row["生成文案"]
                     else:
                         pages = [row.get(f"图 {i}", "") for i in range(1, 6) if row.get(f"图 {i}", "")]
-                        cover_url = generate_cover(settings, row.get("生成文案", "") or row.get("PDF 文件名称", pdf.stem), row.get("PDF 文件名称", pdf.stem), row.get("分类", ""), f"{settings.grade}{row.get('科目', '')}", pages)
+                        # 封面依赖文案；HTML 直接点击“生成封面”时，先为缺失文案的条目补全文案。
+                        copy = str(row.get("生成文案") or "").strip()
+                        if not copy:
+                            copy = generate_copy(settings, pdf.name, row.get("分类", ""), f"{settings.grade}{row.get('科目', '')}")
+                            row["生成文案"] = copy
+                        cover_url = generate_cover(settings, copy, row.get("PDF 文件名称", pdf.stem), row.get("分类", ""), f"{settings.grade}{row.get('科目', '')}", pages)
                         row["封面图链接"] = _download_cover(cover_url, pdf, settings, sequence)
                         value = row["封面图链接"]
                     write_tables(rows, settings, [], 0, [f"HTML 按钮生成{action}: {pdf}"])
