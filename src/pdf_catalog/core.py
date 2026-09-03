@@ -317,7 +317,13 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
                 ws.row_dimensions[row_idx].height = max(ws.row_dimensions[row_idx].height or 15, image.height * 0.75)
             except Exception as exc:
                 LOG.warning("页面图片嵌入 Excel 失败: %s (%s)", image_path, exc)
-    for col in range(1,len(HEADERS)+1): ws.column_dimensions[get_column_letter(col)].width = 22 if col<4 else 48
+    # 按字段设置列宽，避免“生成文案”占用过多横向空间。
+    widths = {"序号": 8, "年级": 10, "学期": 10, "科目": 10, "分类": 12,
+              "PDF 文件名称": 26, "生成文案": 32, "封面图链接": 20}
+    for h in HEADERS:
+        widths.setdefault(h, 18)  # 图片列保持适中的缩略图展示宽度
+    for col, h in enumerate(HEADERS, start=1):
+        ws.column_dimensions[get_column_letter(col)].width = widths[h]
     for row in ws.iter_rows(min_row=2):
         for cell in row: cell.alignment=Alignment(vertical="top", wrap_text=True)
     try:
@@ -348,7 +354,7 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
 <html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
 <title>PDF 目录</title><style>
 body{font-family:Arial,\"Microsoft YaHei\",sans-serif;margin:20px;color:#222}h1{font-size:22px}#search{width: min(520px,100%);padding:9px 12px;border:1px solid #bbb;border-radius:6px;margin:0 0 14px;font-size:14px}
-.table-wrap{overflow:auto;border:1px solid #ddd}table{border-collapse:collapse;width:100%;min-width:1500px;font-size:13px}th,td{border:1px solid #ddd;padding:7px;vertical-align:top;line-height:1.4}th{position:sticky;top:0;background:#f3f5f7;white-space:nowrap}td img{max-width:90px;max-height:120px;margin-top:4px}a{color:#1769aa;word-break:break-all}
+.table-wrap{overflow:auto;border:1px solid #ddd}table{border-collapse:collapse;width:100%;min-width:1500px;font-size:13px}th,td{border:1px solid #ddd;padding:7px;vertical-align:top;line-height:1.4}th{position:sticky;top:0;background:#f3f5f7;white-space:nowrap}td img{max-width:90px;max-height:120px;margin-top:4px}a{color:#1769aa;word-break:break-all}th:nth-child(7),td:nth-child(7){width:260px;min-width:180px;max-width:300px;white-space:normal;overflow-wrap:anywhere}
 @media print{#search{display:none}.table-wrap{overflow:visible;border:0}table{min-width:0;font-size:8px}th{position:static}td img{max-width:45px;max-height:60px}}
 </style></head><body><h1>PDF 目录（单页表格）</h1><input id=\"search\" placeholder=\"输入关键词筛选…\" oninput=\"filterRows()\"><div class=\"table-wrap\"><table><thead><tr>""" + head + """</tr></thead><tbody id=\"rows\">""" + "".join(body) + """</tbody></table></div><script>function filterRows(){const q=document.getElementById('search').value.toLowerCase();document.querySelectorAll('#rows tr').forEach(r=>r.style.display=r.innerText.toLowerCase().includes(q)?'':'none')}</script></body></html>""", encoding="utf-8")
         # errors 按处理阶段记录；同一 PDF 可能同时在文案、封面等阶段失败。
