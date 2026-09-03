@@ -1,7 +1,7 @@
 """PDF discovery, rendering and catalog output."""
 from __future__ import annotations
 
-import csv, hashlib, logging, os, re, time, shutil, json, urllib.request, base64, mimetypes
+import csv, hashlib, logging, os, re, time, shutil, json, urllib.request, urllib.parse, base64, mimetypes
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -10,6 +10,7 @@ import pymupdf
 import yaml
 from PIL import Image, ImageDraw, ImageFont
 from openpyxl import Workbook
+from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
@@ -96,6 +97,42 @@ def process_pdf(pdf: Path, settings: Settings, sequence: int, watermark=True) ->
     except Exception as exc:
         return pdf.stem, [], f"{type(exc).__name__}: {exc}"
 
+def _output_folder(pdf: Path, settings: Settings, sequence: int) -> Path:
+    """返回 PDF 页面图片所在目录，封面图与页面图共用该目录。"""
+    rel = pdf.relative_to(settings.source_root)
+    semester, subject, category = directory_fields(pdf, settings)
+    return (settings.output_root / "images" / safe_dir_name(settings.grade) /
+            safe_dir_name(semester) / safe_dir_name(subject or "未分类") /
+            safe_dir_name(category or "未分类") / f"{sequence:06d}")
+
+def _download_cover(url: str, pdf: Path, settings: Settings, sequence: int) -> str:
+    """下载封面到页面图片目录，并返回相对 output_root 的路径。"""
+    if not url:
+        return ""
+    folder = _output_folder(pdf, settings, sequence)
+    folder.mkdir(parents=True, exist_ok=True)
+    # 每个 PDF 的封面文件名固定，避免文件名变化影响后续引用。
+    out = folder / "cover.png"
+    if url.startswith("data:"):
+        header, encoded = url.split(",", 1)
+        mime = header[5:].split(";", 1)[0]
+        content = base64.b64decode(encoded)
+    else:
+        req = urllib.request.Request(url, headers={"User-Agent": "pdf-catalog"})
+        with urllib.request.urlopen(req, timeout=float(settings.ai.get("timeout", 60))) as res:
+            content = res.read()
+    # 统一转 PNG，确保固定扩展名和 Excel 嵌入兼容性。
+    tmp = folder / "cover.png.tmp"
+    try:
+        tmp.write_bytes(content)
+        with Image.open(tmp) as image:
+            image.convert("RGB").save(tmp.with_suffix(".converted.png"), "PNG")
+        os.replace(tmp.with_suffix(".converted.png"), out)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    return str(out.relative_to(settings.output_root)).replace(os.sep, "/")
+
 def _doubao(settings: Settings, messages: list[dict[str, str]], *, image=False) -> Any:
     """调用豆包 Ark 的 OpenAI 兼容接口；未配置时明确报错。"""
     model_key = "image_model" if image else "copy_model"
@@ -120,19 +157,69 @@ def _doubao(settings: Settings, messages: list[dict[str, str]], *, image=False) 
     with urllib.request.urlopen(req, timeout=float(settings.ai.get("timeout", 60))) as res:
         return json.loads(res.read().decode("utf-8"))
 
+
+# 与业务侧提示词保持一致，避免 AI 生成时因提示词过度压缩而遗漏审核红线。
+COPY_RED_LINES = """内容红线——以下一律禁止出现：
+1. 绝对化/夸大用语：最、第一、唯一、顶级、全网独家、绝无仅有、100%、满分、包过、保分、稳上、必拿A、成绩暴涨、速成、永久免费等；
+2. 承诺提分/保证效果：不得写“稳拿A”“提X分”“保证进步”，改为“帮助查漏补缺”“巩固基础”“考前更安心”；
+3. 过度贩卖焦虑：不得写“别人家孩子都会了，你家还在玩”“再不练就完了”“一步落后步步落后”等恐吓式表述；紧迫感只能用真实时间节点（如“期末复习季到了”“开学已一个月”）正向表达；
+4. 虚假稀缺/诱导：不得虚构“马上删”“最后几份”“不转就没了”“免费送”等不实信息；
+5. 站外引流：不得出现加微信、私信领、点链接、群号等导流行为；
+6. 不实头衔：不得使用“官方”“内部”“绝密”“独家整理”等无法证实的表述；
+7. 拉踩贬低：不得贬低其他资料、机构或老师；
+8. 版权风险：不得出现盗版、破解、翻印等字眼，统一称“学习资料/练习题”。"""
+
+COPY_FORBIDDEN_TERMS = (
+    "最", "第一", "唯一", "顶级", "全网独家", "绝无仅有", "100%", "满分", "包过", "保分",
+    "稳上", "必拿A", "成绩暴涨", "速成", "永久免费", "稳拿A", "提分", "保证进步", "马上删",
+    "最后几份", "不转就没了", "免费送", "加微信", "私信领", "点链接", "群号", "官方", "内部",
+    "绝密", "独家整理", "盗版", "破解", "翻印", "别人家孩子都会了，你家还在玩", "再不练就完了",
+    "一步落后步步落后",
+)
+
+
+def _copy_prompt(filename: str, category: str, grade_subject: str) -> str:
+    return f"""【角色】你是一位熟悉《广告法》及抖音、小红书内容审核规范的教辅资料营销文案专家。文案必须合规、真实、正向，同时保留适度紧迫感和行动感，让宝妈想保存、想打印。
+【任务】根据【文件名】【资料类型】【年级科目】，生成一条不超过100字（含标点）的营销文案。
+【输入】文件名：{filename}；资料类型：{category or '学习资料'}；年级科目：{grade_subject}
+{COPY_RED_LINES}
+【写作要求】口语化、有画面感，像懂行的学姐/老师提醒宝妈；紧迫感使用真实时间节点+轻行动建议，不靠恐吓；开头点明场景/痛点，中间说明资料覆盖内容和帮助，结尾使用一个轻行动指令（打印、保存、每天练一页）；必须紧扣文件名具体内容，避免通用套话；可用感叹号、省略号，emoji不超过1个。
+【输出格式】只输出文案，不加解释、不加引号、不分段。"""
+
 def generate_copy(settings: Settings, filename: str, category: str, grade_subject: str) -> str:
-    prompt = f"根据文件名“{filename}”、资料类型“{category or '学习资料'}”、年级科目“{grade_subject}”，按儿童教辅营销要求写一条简体中文文案：100字以内，口语化有画面感，至少两种急迫感，紧扣文件名具体内容，结尾催促保存/打印。只输出文案。"
+    prompt = _copy_prompt(filename, category, grade_subject)
     data = _doubao(settings, [{"role": "user", "content": prompt}])
     content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
     if isinstance(content, list): content = "".join(x.get("text", "") for x in content if isinstance(x, dict))
-    return str(content).strip()[:100]
+    result = str(content).strip().replace("\n", "")
+    # 防止模型偶尔带回 Markdown 包裹、超出字数要求或重复出现明确禁用词。
+    result = result.strip("`\"“”")
+    for term in COPY_FORBIDDEN_TERMS:
+        result = result.replace(term, "")
+    return result[:100]
 
 def generate_cover(settings: Settings, copy: str, name: str, category: str, grade_subject: str) -> str:
-    prompt = f"生成竖版儿童学习资料封面图。严格使用奶油白浅燕麦纸纹、雾蓝暖粉鹅黄低饱和手账风，无水印无logo。顶部居中标题取文案最抓眼一句不超过10字并加鹅黄波浪线；中部卡片写资料名称和亮点；底部10%写打印版·趁早存好。文案：{copy}；资料名称：{name}；亮点：{category or '查漏补缺·每日一练'}；年级科目：{grade_subject}。文字清晰。"
+    prompt = f"""【角色】你是一位儿童教辅类学习资料封面设计师，擅长为宝妈群体设计温暖、干净、有手账感的竖版封面。
+【任务】根据封面文案、资料名称、亮点、年级科目生成一张竖版封面图。
+【固定段——背景与底部每张封面必须严格照抄，一个字都不能改】
+竖版儿童学习资料分享封面，日系治愈手账风，奶油白与浅燕麦色纸张底纹铺满背景，轻微纸纹颗粒与手绘笔触质感，雾蓝、暖粉、鹅黄三色低饱和点缀，暖色柔和光线与轻微纸张阴影，画面无水印无平台标识。
+- 底部约10%提示区：一行灰棕色手写小字（如“打印版·趁早存好”）
+【顶部标题区——位置永远固定，样式与文字随文案可变】
+- 位置固定：标题始终位于画面顶部约15%高度的居中区域，标题下方保留一条鹅黄色手绘波浪下划线
+- 文字可变：标题内容从文案中提取最抓眼的一句（≤10字），随不同文案变化
+- 样式可变：根据标题字数与文案语气，从以下样式中选用或微调：a. 荧光笔高亮；b. 圆角标签+印章；c. 描边贴纸字；d. 便签标题条。标题多时可缩小或折行，但位置与下划线不动。
+【可变段——中部内容区，自由发挥，不固定模板】
+请根据资料名称、亮点短句和标题语气，自主设计富有变化的手账式版面。可灵活组合或改造便签、单张卡片、错落拼贴、文件夹、练习纸、书本、铅笔、星星、纸胶带等元素；每张封面可改变卡片数量、大小、位置、倾斜角度、留白比例和装饰组合，避免重复使用相同的版式框架。资料名称与亮点要有清晰主次、方便阅读；年级科目统一放在中下部的米黄色横条标签卡中，位置可有小幅变化但需保持稳定识别。
+【本张可变内容】封面文案：“{copy}”；资料名称：“{name}”；亮点短句：“{category or '查漏补缺·每日一练'}”；年级科目：“{grade_subject}”。
+【规则】所有待渲染中文用“”标出并写清位置；全图不超过4处主要文字块，每处≤10字；文字清晰可读、笔画完整；严禁水印、平台logo。背景质感、主色调、字体气质和信息层级保持统一，版面结构、卡片形态、装饰元素与留白方式可自然变化；画面要像同一套系列资料，但不要每张都长得一样。"""
     data = _doubao(settings, [{"role": "user", "content": prompt}], image=True)
     def find(v):
-        if isinstance(v, str) and (v.startswith("http://") or v.startswith("https://")): return v
+        if isinstance(v, str) and (v.startswith("http://") or v.startswith("https://") or v.startswith("data:image/")): return v
         if isinstance(v, dict):
+            # 兼容部分图片模型返回的 base64 字段。
+            encoded = v.get("b64_json")
+            if isinstance(encoded, str) and encoded:
+                return "data:image/png;base64," + encoded
             for x in v.values():
                 got = find(x)
                 if got: return got
@@ -148,6 +235,23 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
     wb=Workbook(); ws=wb.active; ws.title="PDF目录"; ws.append(HEADERS); ws.freeze_panes="A2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HEADERS))}{len(rows)+1}"
     for c in ws[1]: c.font=Font(bold=True); c.alignment=Alignment(horizontal="center")
     for row in rows: ws.append([row.get(h,"") for h in HEADERS])
+    # 封面列同时嵌入本地图片；单元格仍保留相对路径，便于筛选、导出 CSV 和定位文件。
+    for row_idx, row in enumerate(rows, start=2):
+        cover = str(row.get("封面图链接") or "")
+        if not cover:
+            continue
+        image_path = settings.output_root / cover
+        if not image_path.is_file():
+            continue
+        try:
+            image = XLImage(str(image_path))
+            original_width, original_height = image.width, image.height
+            image.width = 90
+            image.height = int(90 * original_height / original_width) if original_width else 120
+            ws.add_image(image, f"H{row_idx}")
+            ws.row_dimensions[row_idx].height = max(ws.row_dimensions[row_idx].height or 15, image.height * 0.75)
+        except Exception as exc:
+            LOG.warning("封面图片嵌入 Excel 失败: %s (%s)", image_path, exc)
     for col in range(1,len(HEADERS)+1): ws.column_dimensions[get_column_letter(col)].width = 22 if col<4 else 48
     for row in ws.iter_rows(min_row=2):
         for cell in row: cell.alignment=Alignment(vertical="top", wrap_text=True)
@@ -155,7 +259,11 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
         wb.save(xlsx)
         with csvp.open("w", newline="", encoding="utf-8-sig") as f: w=csv.DictWriter(f, fieldnames=HEADERS); w.writeheader(); w.writerows(rows)
         with (settings.output_root/"errors.csv").open("w", newline="", encoding="utf-8-sig") as f: w=csv.DictWriter(f, fieldnames=["path","stage","error"]); w.writeheader(); w.writerows(errors)
-        summary = f"发现数: {len(rows)}\n成功数: {len(rows)-len(errors)}\n失败数: {len(errors)}\n耗时秒: {elapsed:.2f}\n"
+        # errors 按处理阶段记录；同一 PDF 可能同时在文案、封面等阶段失败。
+        # 汇总时按 PDF 路径去重，避免一个 PDF 的多条错误导致成功数变成负数。
+        failed_paths = {str(error.get("path", "")) for error in errors if error.get("path")}
+        failed_count = len(failed_paths)
+        summary = f"发现数: {len(rows)}\n成功数: {max(0, len(rows)-failed_count)}\n失败数: {failed_count}\n耗时秒: {elapsed:.2f}\n"
         detail_text = "\n".join(details or [])
         (settings.output_root/"run.log").write_text((detail_text + "\n\n" if detail_text else "") + summary, encoding="utf-8")
     except PermissionError as exc:
@@ -202,15 +310,27 @@ def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_page
         if ai_limit is not None and idx >= int(ai_limit): in_ai_range = False
         if in_ai_range and (generate_copy_flag or settings.ai.get("generate_copy")):
             try: row["生成文案"] = generate_copy(settings, pdf.name, category, f"{settings.grade}{subject}")
-            except Exception as exc: errors.append({"path":str(pdf),"stage":"copy","error":f"{type(exc).__name__}: {exc}"})
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                errors.append({"path":str(pdf),"stage":"copy","error":error})
+                LOG.error("[%d/%d] 文案生成失败: %s (%s)", idx + 1, len(files), pdf, error)
+                details.append(f"[{idx + 1}/{len(files)}] 文案生成失败: {pdf} ({error})")
         if in_ai_range and (generate_cover_flag or settings.ai.get("generate_cover")):
             try:
                 cover_copy = row["生成文案"] or title
-                row["封面图链接"] = generate_cover(settings, cover_copy, title, category, f"{settings.grade}{subject}")
-            except Exception as exc: errors.append({"path":str(pdf),"stage":"cover","error":f"{type(exc).__name__}: {exc}"})
+                cover_url = generate_cover(settings, cover_copy, title, category, f"{settings.grade}{subject}")
+                row["封面图链接"] = _download_cover(cover_url, pdf, settings, idx + 1)
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                errors.append({"path":str(pdf),"stage":"cover","error":error})
+                LOG.error("[%d/%d] 封面生成失败: %s (%s)", idx + 1, len(files), pdf, error)
+                details.append(f"[{idx + 1}/{len(files)}] 封面生成失败: {pdf} ({error})")
         rows.append(row)
     if not dry_run:
         LOG.info("开始写入目录文件: %s", settings.output_root)
         write_tables(rows, settings, errors, time.time()-run_start, details)
         LOG.info("目录文件写入完成: %s", settings.output_root)
-    return {"发现数":len(files),"成功数":len(rows)-len(errors),"失败数":len(errors),"生成图片数":sum(sum(bool(r[h]) for h in HEADERS[8:]) for r in rows)}
+    # errors 是阶段级明细，统计结果应按 PDF 去重。
+    failed_paths = {str(error.get("path", "")) for error in errors if error.get("path")}
+    failed_count = len(failed_paths)
+    return {"发现数":len(files),"成功数":max(0, len(rows)-failed_count),"失败数":failed_count,"生成图片数":sum(sum(bool(r[h]) for h in HEADERS[8:]) for r in rows)}
