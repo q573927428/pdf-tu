@@ -20,12 +20,12 @@ table:
   include_metadata_title: false
 # 豆包 Ark（OpenAI 兼容接口）。默认关闭；开启后使用 --generate-copy/--generate-cover。
 ai:
-  enabled: false
-  endpoint: "https://ark.cn-beijing.volces.com/api/v3"
-  image_endpoint: ""
-  api_key: ""
-  model: ""
-  generate_copy: false
-  generate_cover: false
-  timeout: 60
-  image_size: "1024x1536"
+  enabled: false # 是否启用豆包 API；未配置完成时请保持 false
+  endpoint: "https://ark.cn-beijing.volces.com/api/v3" # 文案生成接口基础地址
+  image_endpoint: "" # 封面图接口基础地址；留空则沿用 endpoint
+  api_key: "" # 豆包 API Key，建议使用环境变量或本地私密配置
+  model: "" # 豆包推理接入点 ID，例如 ep-xxxxxxxx
+  generate_copy: false # 是否在运行时自动生成营销文案
+  generate_cover: false # 是否在运行时自动生成封面图链接
+  timeout: 60 # API 请求超时时间（秒）
+  image_size: "1024x1536" # 封面图尺寸，竖版建议使用该比例
