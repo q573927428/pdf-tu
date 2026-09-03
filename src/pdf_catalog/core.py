@@ -227,11 +227,30 @@ COPY_FORBIDDEN_TERMS = (
 
 def _copy_prompt(filename: str, category: str, grade_subject: str) -> str:
     return f"""【角色】你是一位熟悉《广告法》及抖音、小红书内容审核规范的教辅资料营销文案专家。文案必须合规、真实、正向，同时保留适度紧迫感和行动感，让宝妈想保存、想打印。
-【任务】根据【文件名】【资料类型】【年级科目】，生成一条不超过150字（含标点）的营销文案。
+【任务】根据【文件名】【资料类型】【年级科目】，生成一条正文不超过150字（含标点）的营销文案，并在正文末尾添加1至5个相关话题；话题不计入150字限制。
 【输入】文件名：{filename}；资料类型：{category or '学习资料'}；年级科目：{grade_subject}
 {COPY_RED_LINES}
-【写作要求】口语化、有画面感，像懂行的学姐/老师提醒宝妈；紧迫感使用真实时间节点+轻行动建议，不靠恐吓；开头点明场景/痛点，中间说明资料覆盖内容和帮助，结尾使用一个轻行动指令（打印、保存、每天练一页）；必须紧扣文件名具体内容，避免通用套话；可用感叹号、省略号，emoji不超过1个。
-【输出格式】只输出文案，不加解释、不加引号、不分段。"""
+【写作要求】口语化、有画面感，像懂行的学姐/老师提醒宝妈；紧迫感使用真实时间节点+轻行动建议，不靠恐吓；开头点明场景/痛点，中间说明资料覆盖内容和帮助，结尾使用一个轻行动指令（打印、保存、每天练一页）；必须紧扣文件名具体内容，避免通用套话；可用感叹号、省略号，emoji不超过1个；话题须使用#开头，彼此用空格分隔，放在正文最后。
+【输出格式】只输出正文和末尾话题，不加解释、不加引号、不分段。"""
+
+
+def _copy_topics(result: str, category: str, grade_subject: str) -> tuple[str, list[str]]:
+    """Extract trailing hashtags so they do not count toward the copy limit."""
+    match = re.search(r"(?:^|\s)((?:#[^\s#]+(?:\s+|$)){1,})$", result)
+    if match:
+        topics = re.findall(r"#[^\s#]+", match.group(1))[:5]
+        body = result[:match.start(1)].rstrip(" ，。；;、")
+        if topics:
+            return body, topics
+
+    topics = []
+    for value in (category, grade_subject, "学习资料", "每日练习"):
+        topic = re.sub(r"\s+", "", str(value or "")).lstrip("#")
+        if topic and topic not in {item[1:] for item in topics}:
+            topics.append(f"#{topic}")
+        if len(topics) == 5:
+            break
+    return result, topics[:5]
 
 def generate_copy(settings: Settings, filename: str, category: str, grade_subject: str) -> str:
     prompt = _copy_prompt(filename, category, grade_subject)
@@ -243,7 +262,8 @@ def generate_copy(settings: Settings, filename: str, category: str, grade_subjec
     result = result.strip("`\"“”")
     for term in COPY_FORBIDDEN_TERMS:
         result = result.replace(term, "")
-    return result[:150]
+    body, topics = _copy_topics(result, category, grade_subject)
+    return f"{body[:150].rstrip()} {' '.join(topics)}".strip()
 
 def generate_cover(settings: Settings, copy: str, name: str, category: str, grade_subject: str, page_images: list[str] | None = None) -> str:
     prompt = f"""【角色】你是一位儿童教辅类学习资料封面设计师，擅长为宝妈群体设计温暖、干净、有手账感的竖版封面。
@@ -355,10 +375,15 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
         def esc(value: Any) -> str:
             import html
             return html.escape(str(value or ""))
-        def copy_control(value: str) -> str:
-            return (f'<span class="copy-value">{esc(value)}</span>'
-                    f'<button class="copy-btn" type="button" data-copy="{esc(value)}" '
-                    f'onclick="copyText(this)" title="复制内容" aria-label="复制内容">⧉</button>')
+        def copy_control(value: str, sequence: str = "", refresh: bool = False) -> str:
+            control = (f'<span class="copy-value">{esc(value)}</span>'
+                       f'<button class="copy-btn" type="button" data-copy="{esc(value)}" '
+                       f'onclick="copyText(this)" title="复制内容" aria-label="复制内容">⧉</button>')
+            if refresh:
+                control += (f'<button class="copy-btn" type="button" data-action="copy" '
+                            f'data-sequence="{esc(sequence)}" onclick="generate(this)" '
+                            f'title="重新生成文案" aria-label="重新生成文案">↻</button>')
+            return control
         head = "".join(f"<th>{esc(h)}</th>" for h in HEADERS)
         body = []
         statuses = _load_publish_status(settings)
@@ -368,13 +393,15 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
                 value = str(row.get(h, "") or "")
                 sequence = esc(row.get("序号", ""))
                 if h == "封面图链接" and value:
-                    cells.append(f'<td><a href="{esc(value)}">{esc(value)}</a><br><img src="{esc(value)}" alt="封面"></td>')
+                    cells.append(f'<td><a href="{esc(value)}">{esc(value)}</a><br><img src="{esc(value)}" alt="封面">'
+                                 f'<br><button class="copy-btn" type="button" data-action="cover" data-sequence="{sequence}" '
+                                 f'onclick="generate(this)" title="重新生成封面" aria-label="重新生成封面">↻</button></td>')
                 elif h == "封面图链接":
                     cells.append(f'<td><button class="generate-btn" data-action="cover" data-sequence="{sequence}" onclick="generate(this)">生成封面</button></td>')
                 elif h == "生成文案" and not value:
                     cells.append(f'<td><button class="generate-btn" data-action="copy" data-sequence="{sequence}" onclick="generate(this)">生成文案</button></td>')
                 elif h in {"PDF 文件名称", "生成文案"}:
-                    cells.append(f"<td>{copy_control(value)}</td>")
+                    cells.append(f"<td>{copy_control(value, sequence, h == '生成文案')}</td>")
                 elif h == "操作":
                     status = statuses.get(str(row.get("序号", "")), "未发布")
                     cells.append(f'<td><button class="status-btn {"published" if status == "已发布" else "unpublished"}" data-sequence="{sequence}" data-status="{status}" onclick="toggleStatus(this)">{status}</button></td>')
@@ -400,10 +427,11 @@ function filterRows(){currentPage=1;renderPage()}
 async function toggleStatus(button){const oldStatus=button.dataset.status;const status=oldStatus==='已发布'?'未发布':'已发布';button.disabled=true;try{const response=await fetch(API_BASE+'/api/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sequence:button.dataset.sequence,status})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'状态保存失败');button.dataset.status=status;button.textContent=status;button.classList.toggle('published',status==='已发布');button.classList.toggle('unpublished',status==='未发布');showToast(status)}catch(error){showToast(error.message)}finally{button.disabled=false}}
 function showToast(message){const toast=document.getElementById('toast');toast.textContent=message;toast.classList.add('show');clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>toast.classList.remove('show'),1800)}
 async function copyText(button){const value=button.dataset.copy||'';try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(value)}else{const area=document.createElement('textarea');area.value=value;area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.focus();area.select();document.execCommand('copy');area.remove()}showToast('复制成功')}catch(error){showToast('复制失败，请手动复制')}}
-generate=async function(button){const action=button.dataset.action,sequence=button.dataset.sequence;button.disabled=true;button.textContent='生成中…';try{const response=await fetch(API_BASE+'/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,sequence})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'生成失败');const cell=button.closest('td');if(action==='copy'){setCopyCell(cell,result.value)}else{cell.innerHTML='<a href="'+result.value+'" target="_blank">'+result.value+'</a><br><img src="'+result.value+'" alt="封面">'}}catch(error){button.disabled=false;button.textContent=action==='copy'?'生成文案':'生成封面';alert(error.message+'\\n请确认已启动 pdf-catalog serve，并检查 AI 配置。')}};
-function setCopyCell(cell,value){cell.innerHTML='<span class="copy-value"></span><button class="copy-btn" type="button" title="复制内容" aria-label="复制内容" onclick="copyText(this)">⧉</button>';cell.querySelector('.copy-value').textContent=value;cell.querySelector('.copy-btn').dataset.copy=value}
+generate=async function(button){const action=button.dataset.action,sequence=button.dataset.sequence;button.disabled=true;button.textContent='生成中…';try{const response=await fetch(API_BASE+'/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,sequence})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'生成失败');const cell=button.closest('td');if(action==='copy'){setCopyCell(cell,result.value,sequence)}else{setCoverCell(cell,result.value,sequence)}}catch(error){button.disabled=false;button.textContent=action==='copy'?'生成文案':'生成封面';alert(error.message+'\\n请确认已启动 pdf-catalog serve，并检查 AI 配置。')}};
+function setCopyCell(cell,value,sequence){cell.innerHTML='<span class="copy-value"></span><button class="copy-btn" type="button" title="复制内容" aria-label="复制内容" onclick="copyText(this)">⧉</button><button class="copy-btn" type="button" data-action="copy" data-sequence="'+sequence+'" title="重新生成文案" aria-label="重新生成文案" onclick="generate(this)">↻</button>';cell.querySelector('.copy-value').textContent=value;cell.querySelector('.copy-btn').dataset.copy=value}
+function setCoverCell(cell,value,sequence){cell.innerHTML='<a href="'+value+'" target="_blank">'+value+'</a><br><img src="'+value+'" alt="封面"><br><button class="copy-btn" type="button" data-action="cover" data-sequence="'+sequence+'" title="重新生成封面" aria-label="重新生成封面" onclick="generate(this)">↻</button>'}
 renderPage();
-async function generate(button){const action=button.dataset.action, sequence=button.dataset.sequence;button.disabled=true;button.textContent='生成中…';try{const response=await fetch(API_BASE+'/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,sequence})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'生成失败');const cell=button.closest('td');if(action==='copy'){cell.textContent=result.value}else{cell.innerHTML='<a href="'+result.value+'" target="_blank">'+result.value+'</a><br><img src="'+result.value+'" alt="封面">'}}catch(error){button.disabled=false;button.textContent=action==='copy'?'生成文案':'生成封面';alert(error.message+'\\n请确认已启动 pdf-catalog serve，并检查 AI 配置。')}}</script></body></html>""", encoding="utf-8")
+async function generate(button){const action=button.dataset.action, sequence=button.dataset.sequence;button.disabled=true;button.textContent='生成中…';try{const response=await fetch(API_BASE+'/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,sequence})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'生成失败');const cell=button.closest('td');if(action==='copy'){setCopyCell(cell,result.value,sequence)}else{setCoverCell(cell,result.value,sequence)}}catch(error){button.disabled=false;button.textContent=action==='copy'?'生成文案':'生成封面';alert(error.message+'\\n请确认已启动 pdf-catalog serve，并检查 AI 配置。')}}</script></body></html>""", encoding="utf-8")
         # errors 按处理阶段记录；同一 PDF 可能同时在文案、封面等阶段失败。
         # 汇总时按 PDF 路径去重，避免一个 PDF 的多条错误导致成功数变成负数。
         failed_paths = {str(error.get("path", "")) for error in errors if error.get("path")}
