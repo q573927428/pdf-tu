@@ -37,6 +37,8 @@ pdf-catalog ai --config config.yaml --start 1 --end 10 --generate-copy
 pdf-catalog serve --config config.yaml
 ```
 
+在 Windows 中也可以直接双击项目根目录的 `start_server.bat`：脚本会使用 `.venv` 中的 Python 启动本地服务，等待服务就绪后自动打开 `pdf_catalog.html`。如使用自定义端口或 HTML 文件名，请同步修改脚本顶部的 `PAGE` 地址。
+
 表格新增“生成文案”和“封面图链接”两列。豆包接口采用 Ark 的 OpenAI 兼容地址，配置 `ai.enabled/api_key`，并分别设置 `copy_model`（文本模型）和 `image_model`（图片生成模型，如 Seedream）后再显式传入生成参数；两者留空时会兼容使用旧的 `ai.model`。文案和封面图共用同一个基础 `endpoint`，但分别访问 `/chat/completions` 和 `/images/generations`。生成的封面会自动下载到对应 PDF 的 `output/images/.../<序号>/cover.png`；XLSX 中“封面图链接”及“图 1”至“图 5”列均保留图片路径文字、不嵌入图片，HTML 中则显示可点击的图片缩略图且不显示路径，CSV 仍保留相对路径。`--ai-start/--ai-end/--ai-limit` 只约束 AI 生成范围，`--start/--end` 约束本次扫描范围。
 
 项目根目录提供 `static/` 静态资源目录。生成封面时可在 `ai.reference_image` 填写参考图 URL，或填写本地路径（例如 `./static/reference.png`）；程序会将其作为图片生成接口的 `image` 参数，实现图文生图/参考图编辑。留空则按纯文生图处理。

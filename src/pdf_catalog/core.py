@@ -1,7 +1,7 @@
 """PDF discovery, rendering and catalog output."""
 from __future__ import annotations
 
-import csv, hashlib, logging, os, re, time, shutil, json, urllib.request, urllib.parse, base64, mimetypes, threading
+import csv, hashlib, logging, os, re, time, shutil, json, urllib.request, urllib.parse, urllib.error, base64, mimetypes, threading, subprocess, sys
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -363,10 +363,13 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
         def esc(value: Any) -> str:
             import html
             return html.escape(str(value or ""))
-        def copy_control(value: str, sequence: str = "", refresh: bool = False) -> str:
+        def copy_control(value: str, sequence: str = "", refresh: bool = False, folder: bool = False) -> str:
             control = (f'<span class="copy-value">{esc(value)}</span>'
                        f'<button class="copy-btn" type="button" data-copy="{esc(value)}" '
                        f'onclick="copyText(this)" title="复制内容" aria-label="复制内容">⧉</button>')
+            if folder:
+                control += (f'<button class="copy-btn folder-btn" type="button" data-sequence="{esc(sequence)}" '
+                            f'onclick="openFolder(this)" title="打开生成文件目录" aria-label="打开生成文件目录">📁</button>')
             if refresh:
                 control += (f'<button class="copy-btn" type="button" data-action="copy" '
                             f'data-sequence="{esc(sequence)}" onclick="generate(this)" '
@@ -389,7 +392,7 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
                 elif h == "生成文案" and not value:
                     cells.append(f'<td><button class="generate-btn" data-action="copy" data-sequence="{sequence}" onclick="generate(this)">生成文案</button></td>')
                 elif h in {"PDF 文件名称", "生成文案"}:
-                    cells.append(f"<td>{copy_control(value, sequence, h == '生成文案')}</td>")
+                    cells.append(f"<td>{copy_control(value, sequence, h == '生成文案', h == 'PDF 文件名称')}</td>")
                 elif h == "操作":
                     status = statuses.get(str(row.get("序号", "")), "未发布")
                     cells.append(f'<td><button class="status-btn {"published" if status == "已发布" else "unpublished"}" data-sequence="{sequence}" data-status="{status}" onclick="toggleStatus(this)">{status}</button></td>')
@@ -416,6 +419,7 @@ function filterRows(){currentPage=1;renderPage()}
 async function toggleStatus(button){const oldStatus=button.dataset.status;const status=oldStatus==='已发布'?'未发布':'已发布';button.disabled=true;try{const response=await fetch(API_BASE+'/api/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sequence:button.dataset.sequence,status})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'状态保存失败');button.dataset.status=status;button.textContent=status;button.classList.toggle('published',status==='已发布');button.classList.toggle('unpublished',status==='未发布');showToast(status)}catch(error){showToast(error.message)}finally{button.disabled=false}}
 function showToast(message){const toast=document.getElementById('toast');toast.textContent=message;toast.classList.add('show');clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>toast.classList.remove('show'),1800)}
 async function copyText(button){const value=button.dataset.copy||'';try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(value)}else{const area=document.createElement('textarea');area.value=value;area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.focus();area.select();document.execCommand('copy');area.remove()}showToast('复制成功')}catch(error){showToast('复制失败，请手动复制')}}
+async function openFolder(button){const sequence=button.dataset.sequence||'';button.disabled=true;try{const response=await fetch(API_BASE+'/api/open-folder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sequence})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'打开目录失败');showToast('已打开生成文件目录')}catch(error){showToast(error.message)}finally{button.disabled=false}}
 function setCopyCell(cell,value,sequence){cell.innerHTML='<span class="copy-value"></span><button class="copy-btn" type="button" title="复制内容" aria-label="复制内容" onclick="copyText(this)">⧉</button><button class="copy-btn" type="button" data-action="copy" data-sequence="'+sequence+'" title="重新生成文案" aria-label="重新生成文案" onclick="generate(this)">↻</button>';cell.querySelector('.copy-value').textContent=value;cell.querySelector('.copy-btn').dataset.copy=value}
 function setCoverCell(cell,value,sequence){cell.innerHTML='<a href="'+value+'" target="_blank"><img src="'+value+'" alt="封面" loading="lazy"></a><br><button class="copy-btn" type="button" data-action="cover" data-sequence="'+sequence+'" title="重新生成封面" aria-label="重新生成封面" onclick="generate(this)">↻</button>'}
 renderPage();
@@ -536,11 +540,25 @@ def serve(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> None
             self.send_header("Access-Control-Allow-Headers", "Content-Type"); self.end_headers()
 
         def do_POST(self):
-            if self.path not in {"/api/generate", "/api/status"}:
+            if self.path not in {"/api/generate", "/api/status", "/api/open-folder"}:
                 self._json(404, {"ok": False, "error": "接口不存在"}); return
             try:
                 length = int(self.headers.get("Content-Length", "0")); request = json.loads(self.rfile.read(length))
                 with generation_lock:
+                    if self.path == "/api/open-folder":
+                        sequence = int(request.get("sequence"))
+                        if sequence < 1: raise ValueError("参数错误")
+                        pdfs = discover(settings.source_root)
+                        if sequence > len(pdfs): raise ValueError("找不到对应 PDF")
+                        folder = _output_folder(pdfs[sequence - 1], settings, sequence).resolve()
+                        if not folder.is_dir(): raise ValueError("文件所在目录不存在")
+                        if sys.platform.startswith("win"):
+                            os.startfile(str(folder))
+                        elif sys.platform == "darwin":
+                            subprocess.Popen(["open", str(folder)])
+                        else:
+                            subprocess.Popen(["xdg-open", str(folder)])
+                        self._json(200, {"ok": True}); return
                     if self.path == "/api/status":
                         sequence = int(request.get("sequence")); status = request.get("status")
                         if sequence < 1 or status not in {"已发布", "未发布"}: raise ValueError("参数错误")
@@ -576,7 +594,17 @@ def serve(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> None
                 self._json(200, {"ok": True, "value": value, "copy": generated_copy})
             except Exception as exc:
                 LOG.exception("HTML 生成请求失败")
-                self._json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+                # WinError 10013 通常由 Windows 防火墙/代理拦截 Python 访问 Ark 接口，
+                # 补充明确提示，避免页面只显示“请确认已启动服务”。
+                detail = f"{type(exc).__name__}: {exc}"
+                cause = exc
+                while getattr(cause, "__cause__", None):
+                    cause = cause.__cause__
+                if isinstance(exc, urllib.error.URLError) or isinstance(cause, urllib.error.URLError):
+                    reason = getattr(cause, "reason", None) or getattr(exc, "reason", None)
+                    if getattr(reason, "winerror", None) == 10013 or "10013" in str(reason):
+                        detail += "；Windows 阻止了 Python 的网络连接，请在防火墙/安全软件中允许 .venv\\Scripts\\python.exe 访问网络，并检查代理设置"
+                self._json(500, {"ok": False, "error": detail})
 
     server = ThreadingHTTPServer((host, port), Handler)
     LOG.info("目录服务已启动: http://%s:%d/", host, port)
