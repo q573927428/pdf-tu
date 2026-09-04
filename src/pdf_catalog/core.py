@@ -444,6 +444,18 @@ def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_page
     else:
         LOG.info("文件筛选完成: 未设置数量限制，实际处理 %d 个 PDF", len(files))
     rows=[]; errors=[]; details=[]; run_start=time.time()
+    # 重新生成目录时保留已有的 AI 文案和封面，避免仅为刷新 HTML 而丢失已完成内容。
+    existing_rows_by_name: dict[str, dict[str, Any]] = {}
+    existing_csv = settings.output_root / settings.table.get("csv", "pdf_catalog.csv")
+    if existing_csv.is_file():
+        try:
+            with existing_csv.open(encoding="utf-8-sig", newline="") as f:
+                for old_row in csv.DictReader(f):
+                    name = str(old_row.get("PDF 文件名称", "") or "").strip()
+                    if name:
+                        existing_rows_by_name[name] = old_row
+        except (OSError, csv.Error) as exc:
+            LOG.warning("读取已有目录以保留文案/封面失败，将按空值重新生成: %s", exc)
     start_detail = f"开始处理: 源目录={settings.source_root}，待处理 PDF {len(files)} 个，模式={mode}"
     LOG.info(start_detail)
     details.append(start_detail)
@@ -464,7 +476,9 @@ def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_page
             LOG.info(detail)
         details.append(detail)
         semester, subject, category = directory_fields(pdf, settings)
-        row={"序号": range_start + idx, "年级":settings.grade,"学期":semester,"科目":subject,"分类":category,"PDF 文件名称":title,"生成文案":"","封面图链接":""}
+        old_row = existing_rows_by_name.get(title, {})
+        row={"序号": range_start + idx, "年级":settings.grade,"学期":semester,"科目":subject,"分类":category,"PDF 文件名称":title,
+             "生成文案":str(old_row.get("生成文案", "") or ""), "封面图链接":str(old_row.get("封面图链接", "") or "")}
         for i,h in enumerate(HEADERS[8:]): row[h]=paths[i] if i<len(paths) else ""
         ai_index = range_start + idx
         in_ai_range = (ai_start is None or ai_index >= int(ai_start)) and (ai_end is None or ai_index <= int(ai_end))
