@@ -191,8 +191,9 @@ def _doubao(settings: Settings, messages: list[dict[str, str]], *, image=False, 
         if single:
             refs.insert(0, single)
         refs.extend(str(x).strip() for x in (image_references or []) if str(x).strip())
-        # 保持顺序并去重；Seedream 多图输入通常支持最多 14 张。
-        refs = list(dict.fromkeys(refs))[:14]
+        # 保持顺序并去重；为控制请求体大小，封面最多携带 3 张参考图。
+        # 该数量包含配置中的固定参考图和当前 PDF 页面图。
+        refs = list(dict.fromkeys(refs))[:3]
         if refs:
             encoded_refs = [_image_input(ref, settings) for ref in refs]
             # 只有一张时保持单图兼容格式；PDF 页面存在时自然使用多图数组。
