@@ -11,10 +11,9 @@ set "PYTHONPATH=%ROOT%src"
 if not exist "%PYTHON%" goto missing_python
 if not exist "%CONFIG%" goto missing_config
 
-rem Close stale PDF Catalog server processes so an old version cannot handle requests.
+rem Close stale PDF Catalog server processes before starting a new one.
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; foreach($id in $p){ Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 timeout /t 1 /nobreak >nul
-
 start "PDF Catalog Server" /min "%PYTHON%" -m pdf_catalog.cli serve --config "%CONFIG%"
 
 echo Waiting for the local server...
