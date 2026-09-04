@@ -11,7 +11,6 @@ import pymupdf
 import yaml
 from PIL import Image, ImageDraw, ImageFont
 from openpyxl import Workbook
-from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
@@ -344,47 +343,12 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
     wb=Workbook(); ws=wb.active; ws.title="PDF目录"; ws.append(HEADERS); ws.freeze_panes="A2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HEADERS))}{len(rows)+1}"
     for c in ws[1]: c.font=Font(bold=True); c.alignment=Alignment(horizontal="center")
     for row in rows: ws.append([row.get(h,"") for h in HEADERS])
-    # 封面列同时嵌入本地图片；单元格仍保留相对路径，便于筛选、导出 CSV 和定位文件。
-    for row_idx, row in enumerate(rows, start=2):
-        cover = str(row.get("封面图链接") or "")
-        if not cover:
-            continue
-        image_path = settings.output_root / cover
-        if not image_path.is_file():
-            continue
-        try:
-            image = XLImage(str(image_path))
-            original_width, original_height = image.width, image.height
-            image.width = 90
-            image.height = int(90 * original_height / original_width) if original_width else 120
-            ws.add_image(image, f"H{row_idx}")
-            ws.row_dimensions[row_idx].height = max(ws.row_dimensions[row_idx].height or 15, image.height * 0.75)
-        except Exception as exc:
-            LOG.warning("封面图片嵌入 Excel 失败: %s (%s)", image_path, exc)
-        # 转换后的图片列直接嵌入缩略图，不在单元格中显示路径文字。
-    for row_idx, row in enumerate(rows, start=2):
-        for offset, h in enumerate(HEADERS[8:], start=9):
-            value = str(row.get(h) or "")
-            if not value:
-                continue
-            image_path = settings.output_root / value
-            if not image_path.is_file():
-                continue
-            try:
-                image = XLImage(str(image_path))
-                original_width, original_height = image.width, image.height
-                image.width = 110
-                image.height = int(110 * original_height / original_width) if original_width else 85
-                ws.cell(row=row_idx, column=offset).value = ""
-                ws.add_image(image, f"{get_column_letter(offset)}{row_idx}")
-                ws.row_dimensions[row_idx].height = max(ws.row_dimensions[row_idx].height or 15, image.height * 0.75)
-            except Exception as exc:
-                LOG.warning("页面图片嵌入 Excel 失败: %s (%s)", image_path, exc)
+    # XLSX 中所有图片列均保留路径文字，不嵌入图片；缩略图仅用于 HTML 展示。
     # 按字段设置列宽，避免“生成文案”占用过多横向空间。
     widths = {"序号": 8, "年级": 10, "学期": 10, "科目": 10, "分类": 12,
               "PDF 文件名称": 26, "生成文案": 32, "封面图链接": 20}
     for h in HEADERS:
-        widths.setdefault(h, 18)  # 图片列保持适中的缩略图展示宽度
+        widths.setdefault(h, 18)
     for col, h in enumerate(HEADERS, start=1):
         ws.column_dimensions[get_column_letter(col)].width = widths[h]
     for row in ws.iter_rows(min_row=2):
@@ -417,7 +381,7 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
                 value = str(row.get(h, "") or "")
                 sequence = esc(row.get("序号", ""))
                 if h == "封面图链接" and value:
-                    cells.append(f'<td><a href="{esc(value)}">{esc(value)}</a><br><img src="{esc(value)}" alt="封面">'
+                    cells.append(f'<td><a href="{esc(value)}" target="_blank"><img src="{esc(value)}" alt="封面" loading="lazy"></a>'
                                  f'<br><button class="copy-btn" type="button" data-action="cover" data-sequence="{sequence}" '
                                  f'onclick="generate(this)" title="重新生成封面" aria-label="重新生成封面">↻</button></td>')
                 elif h == "封面图链接":
@@ -440,6 +404,7 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
 <title>PDF 目录</title><style>
 body{font-family:Arial,\"Microsoft YaHei\",sans-serif;margin:20px;color:#222}h1{font-size:22px}#search{width: min(520px,100%);padding:9px 12px;border:1px solid #bbb;border-radius:6px;margin:0 0 14px;font-size:14px}
 .table-wrap{overflow:auto;border:1px solid #ddd}table{border-collapse:collapse;width:100%;min-width:1500px;font-size:13px}th,td{border:1px solid #ddd;padding:7px;vertical-align:top;line-height:1.4}th{position:sticky;top:0;background:#f3f5f7;white-space:nowrap}td img{max-width:90px;max-height:120px;margin-top:4px}a{color:#1769aa;word-break:break-all}th:nth-child(7),td:nth-child(7){width:360px;min-width:180px;max-width:368px;white-space:normal;overflow-wrap:anywhere}.generate-btn,.copy-btn,.page-btn,.status-btn{padding:6px 10px;border:1px solid #1769aa;border-radius:5px;background:#fff;color:#1769aa;cursor:pointer;white-space:nowrap}.generate-btn:disabled,.page-btn:disabled,.status-btn:disabled{opacity:.55;cursor:wait}.copy-btn{padding:1px 5px;margin-top: 2px;font-size:14px;line-height:1.1;vertical-align:middle;border: 0;}.copy-btn:hover,.page-btn:not(:disabled):hover{background:#eaf4ff}.status-btn.published{border-color:#299447;color:#207a39;background:#effaf1}.status-btn.unpublished{border-color:#999;color:#666;background:#fafafa}.notice{color:#777;font-size:12px;margin:-6px 0 14px}.pagination{display:flex;align-items:center;justify-content:center;gap:12px;padding:14px}.page-info{color:#666;font-size:13px}.toast{position:fixed;left:50%;top:24px;transform:translateX(-50%);background:#333;color:#fff;padding:9px 16px;border-radius:5px;z-index:10;opacity:0;transition:opacity .2s}.toast.show{opacity:1}
+th:nth-child(6),td:nth-child(6){width:260px;min-width:0;max-width:260px;white-space:normal;overflow-wrap:anywhere}
 @media print{#search{display:none}.table-wrap{overflow:visible;border:0}table{min-width:0;font-size:8px}th{position:static}td img{max-width:45px;max-height:60px}}
 </style></head><body><h1>PDF 目录（分页表格）</h1><p class=\"notice\">每页显示 50 条。缺少封面图或文案时，可点击对应按钮生成。首次使用请在项目目录运行：<code>pdf-catalog serve --config config.yaml</code></p><div id=\"toast\" class=\"toast\" role=\"status\"></div><input id=\"search\" placeholder=\"输入关键词筛选…\" oninput=\"filterRows()\"><div class=\"table-wrap\"><table><thead><tr>""" + head + """</tr></thead><tbody id=\"rows\">""" + "".join(body) + """</tbody></table></div><div class=\"pagination\"><button id=\"prev-page\" class=\"page-btn\" type=\"button\" onclick=\"changePage(-1)\">上一页</button><span id=\"page-info\" class=\"page-info\"></span><button id=\"next-page\" class=\"page-btn\" type=\"button\" onclick=\"changePage(1)\">下一页</button></div><script>
 const API_BASE='http://127.0.0.1:8765';
@@ -451,11 +416,10 @@ function filterRows(){currentPage=1;renderPage()}
 async function toggleStatus(button){const oldStatus=button.dataset.status;const status=oldStatus==='已发布'?'未发布':'已发布';button.disabled=true;try{const response=await fetch(API_BASE+'/api/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sequence:button.dataset.sequence,status})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'状态保存失败');button.dataset.status=status;button.textContent=status;button.classList.toggle('published',status==='已发布');button.classList.toggle('unpublished',status==='未发布');showToast(status)}catch(error){showToast(error.message)}finally{button.disabled=false}}
 function showToast(message){const toast=document.getElementById('toast');toast.textContent=message;toast.classList.add('show');clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>toast.classList.remove('show'),1800)}
 async function copyText(button){const value=button.dataset.copy||'';try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(value)}else{const area=document.createElement('textarea');area.value=value;area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.focus();area.select();document.execCommand('copy');area.remove()}showToast('复制成功')}catch(error){showToast('复制失败，请手动复制')}}
-generate=async function(button){const action=button.dataset.action,sequence=button.dataset.sequence;button.disabled=true;button.textContent='生成中…';try{const response=await fetch(API_BASE+'/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,sequence})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'生成失败');const cell=button.closest('td');if(action==='copy'){setCopyCell(cell,result.value,sequence)}else{setCoverCell(cell,result.value,sequence)}}catch(error){button.disabled=false;button.textContent=action==='copy'?'生成文案':'生成封面';alert(error.message+'\\n请确认已启动 pdf-catalog serve，并检查 AI 配置。')}};
 function setCopyCell(cell,value,sequence){cell.innerHTML='<span class="copy-value"></span><button class="copy-btn" type="button" title="复制内容" aria-label="复制内容" onclick="copyText(this)">⧉</button><button class="copy-btn" type="button" data-action="copy" data-sequence="'+sequence+'" title="重新生成文案" aria-label="重新生成文案" onclick="generate(this)">↻</button>';cell.querySelector('.copy-value').textContent=value;cell.querySelector('.copy-btn').dataset.copy=value}
-function setCoverCell(cell,value,sequence){cell.innerHTML='<a href="'+value+'" target="_blank">'+value+'</a><br><img src="'+value+'" alt="封面"><br><button class="copy-btn" type="button" data-action="cover" data-sequence="'+sequence+'" title="重新生成封面" aria-label="重新生成封面" onclick="generate(this)">↻</button>'}
+function setCoverCell(cell,value,sequence){cell.innerHTML='<a href="'+value+'" target="_blank"><img src="'+value+'" alt="封面" loading="lazy"></a><br><button class="copy-btn" type="button" data-action="cover" data-sequence="'+sequence+'" title="重新生成封面" aria-label="重新生成封面" onclick="generate(this)">↻</button>'}
 renderPage();
-async function generate(button){const action=button.dataset.action, sequence=button.dataset.sequence;button.disabled=true;button.textContent='生成中…';try{const response=await fetch(API_BASE+'/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,sequence})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'生成失败');const cell=button.closest('td');if(action==='copy'){setCopyCell(cell,result.value,sequence)}else{setCoverCell(cell,result.value,sequence)}}catch(error){button.disabled=false;button.textContent=action==='copy'?'生成文案':'生成封面';alert(error.message+'\\n请确认已启动 pdf-catalog serve，并检查 AI 配置。')}}</script></body></html>""", encoding="utf-8")
+async function generate(button){const action=button.dataset.action,sequence=button.dataset.sequence;const row=button.closest('tr');const copyButton=row&&row.querySelector('[data-action="copy"]');const copyPending=action==='cover'&&copyButton&&copyButton.classList.contains('generate-btn');const copyCell=copyPending&&copyButton.closest('td');const oldCopyText=copyPending&&copyButton.textContent;if(copyPending){copyButton.disabled=true;copyButton.textContent='生成中…'}button.disabled=true;button.textContent='生成中…';try{const response=await fetch(API_BASE+'/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,sequence})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'生成失败');const cell=button.closest('td');if(action==='copy'){setCopyCell(cell,result.value,sequence)}else{if(result.copy&&copyCell)setCopyCell(copyCell,result.copy,sequence);setCoverCell(cell,result.value,sequence)}}catch(error){button.disabled=false;button.textContent=action==='copy'?'生成文案':'生成封面';if(copyPending){copyButton.disabled=false;copyButton.textContent=oldCopyText||'生成文案'}alert(error.message+'\\n请确认已启动 pdf-catalog serve，并检查 AI 配置。')}};</script></body></html>""", encoding="utf-8")
         # errors 按处理阶段记录；同一 PDF 可能同时在文案、封面等阶段失败。
         # 汇总时按 PDF 路径去重，避免一个 PDF 的多条错误导致成功数变成负数。
         failed_paths = {str(error.get("path", "")) for error in errors if error.get("path")}
@@ -579,6 +543,7 @@ def serve(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> None
                     with csv_path.open(encoding="utf-8-sig", newline="") as f: rows = list(csv.DictReader(f))
                     row = next((r for r in rows if int(r.get("序号", 0)) == sequence), None)
                     if row is None: raise ValueError("目录中找不到对应行，请先重新生成目录")
+                    generated_copy = ""
                     if action == "copy":
                         row["生成文案"] = generate_copy(settings, pdf.name, row.get("分类", ""), f"{settings.grade}{row.get('科目', '')}")
                         value = row["生成文案"]
@@ -589,11 +554,12 @@ def serve(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> None
                         if not copy:
                             copy = generate_copy(settings, pdf.name, row.get("分类", ""), f"{settings.grade}{row.get('科目', '')}")
                             row["生成文案"] = copy
+                            generated_copy = copy
                         cover_url = generate_cover(settings, copy, row.get("PDF 文件名称", pdf.stem), row.get("分类", ""), f"{settings.grade}{row.get('科目', '')}", pages)
                         row["封面图链接"] = _download_cover(cover_url, pdf, settings, sequence)
                         value = row["封面图链接"]
                     write_tables(rows, settings, [], 0, [f"HTML 按钮生成{action}: {pdf}"])
-                self._json(200, {"ok": True, "value": value})
+                self._json(200, {"ok": True, "value": value, "copy": generated_copy})
             except Exception as exc:
                 LOG.exception("HTML 生成请求失败")
                 self._json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
