@@ -227,7 +227,7 @@ COPY_FORBIDDEN_TERMS = (
 
 def _copy_prompt(filename: str, category: str, grade_subject: str) -> str:
     return f"""【角色】你是一位熟悉《广告法》及抖音、小红书内容审核规范的教辅资料营销文案专家。文案必须合规、真实、正向，同时保留适度紧迫感和行动感，让宝妈想保存、想打印。
-【任务】根据【文件名】【资料类型】【年级科目】，生成一个不超过20个字的标题，再生成一条正文不超过150字（含标点）的营销文案，并在正文末尾添加1至5个相关话题；话题不计入150字限制。
+【任务】根据【文件名】【资料类型】【年级科目】，生成一个不超过20个字的标题，再生成一条正文不超过150字（含标点）的营销文案，并在正文末尾添加1至4个相关话题；话题不计入150字限制。
 【输入】文件名：{filename}；资料类型：{category or '学习资料'}；年级科目：{grade_subject}
 {COPY_RED_LINES}
 【写作要求】口语化、有画面感，像懂行的学姐/老师提醒宝妈；紧迫感使用真实时间节点+轻行动建议，不靠恐吓；开头点明场景/痛点，中间说明资料覆盖内容和帮助，结尾使用一个轻行动指令（打印、保存、每天练一页）；必须紧扣文件名具体内容，避免通用套话；可用感叹号、省略号，emoji不超过1个；话题须使用#开头，彼此用空格分隔，放在正文最后。
@@ -262,7 +262,7 @@ def _copy_topics(result: str, category: str, grade_subject: str) -> tuple[str, l
     """Extract trailing hashtags so they do not count toward the copy limit."""
     match = re.search(r"(?:^|\s)((?:#[^\s#]+(?:\s+|$)){1,})$", result)
     if match:
-        topics = re.findall(r"#[^\s#]+", match.group(1))[:5]
+        topics = re.findall(r"#[^\s#]+", match.group(1))[:4]
         body = result[:match.start(1)].rstrip(" ，。；;、")
         if topics:
             return body, topics
@@ -272,9 +272,9 @@ def _copy_topics(result: str, category: str, grade_subject: str) -> tuple[str, l
         topic = re.sub(r"\s+", "", str(value or "")).lstrip("#")
         if topic and topic not in {item[1:] for item in topics}:
             topics.append(f"#{topic}")
-        if len(topics) == 5:
+        if len(topics) == 4:
             break
-    return result, topics[:5]
+    return result, topics[:4]
 
 def generate_copy(settings: Settings, filename: str, category: str, grade_subject: str) -> str:
     prompt = _copy_prompt(filename, category, grade_subject)
