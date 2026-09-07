@@ -15,7 +15,12 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
 LOG = logging.getLogger(__name__)
-HEADERS = ["序号", "年级", "学期", "科目", "分类", "PDF 文件名称", "生成文案", "封面图链接", *[f"图 {i}" for i in range(1, 6)], "操作"]
+PAGE_IMAGE_HEADERS = [f"图 {i}" for i in range(1, 6)]
+HEADERS = [
+    "序号", "年级", "学期", "科目", "分类", "PDF 文件名称",
+    "页数", "大小（MB）", "生成文案", "封面图链接",
+    *PAGE_IMAGE_HEADERS, "操作",
+]
 
 @dataclass
 class Settings:
@@ -63,6 +68,16 @@ def load_settings(path: str | Path) -> Settings:
 
 def discover(root: Path) -> list[Path]:
     return sorted((p for p in root.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf"), key=lambda p: str(p.relative_to(root)).lower())
+
+def pdf_stats(pdf: Path) -> tuple[int | str, float]:
+    """返回 PDF 总页数和以 MiB 换算、保留两位小数的文件大小。"""
+    size_mb = round(pdf.stat().st_size / (1024 * 1024), 2)
+    try:
+        with pymupdf.open(pdf) as doc:
+            return len(doc), size_mb
+    except Exception as exc:
+        LOG.warning("读取 PDF 总页数失败: %s (%s: %s)", pdf, type(exc).__name__, exc)
+        return "", size_mb
 
 def safe_name(value: str) -> str:
     value = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._") or "pdf"
@@ -368,7 +383,8 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
     # XLSX 中所有图片列均保留路径文字，不嵌入图片；缩略图仅用于 HTML 展示。
     # 按字段设置列宽，避免“生成文案”占用过多横向空间。
     widths = {"序号": 8, "年级": 10, "学期": 10, "科目": 10, "分类": 12,
-              "PDF 文件名称": 26, "生成文案": 32, "封面图链接": 20}
+              "PDF 文件名称": 26, "页数": 8, "大小（MB）": 12,
+              "生成文案": 32, "封面图链接": 20}
     for h in HEADERS:
         widths.setdefault(h, 18)
     for col, h in enumerate(HEADERS, start=1):
@@ -438,6 +454,8 @@ def write_tables(rows: list[dict[str, Any]], settings: Settings, errors: list[di
 body{font-family:Arial,\"Microsoft YaHei\",sans-serif;margin:20px;color:#222}h1{font-size:22px}.filter-bar{display:flex;align-items:center;gap:14px;margin:0 0 14px}.filter-bar #search{box-sizing:border-box;width:min(520px,100%);padding:9px 12px;border:1px solid #bbb;border-radius:6px;font-size:14px}.category-filter,.subject-filter{padding:8px 10px;border:1px solid #bbb;border-radius:6px;background:#fff;color:#222;font-size:14px}.published-toggle{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;cursor:pointer}.published-toggle input{width:16px;height:16px;margin:0;accent-color:#1769aa;cursor:pointer}
 .table-wrap{overflow:auto;border:1px solid #ddd}table{border-collapse:collapse;width:100%;min-width:1500px;font-size:13px}th,td{border:1px solid #ddd;padding:7px;vertical-align:top;line-height:1.4}th{position:sticky;top:0;background:#f3f5f7;white-space:nowrap}td img{max-width:90px;max-height:120px;margin-top:4px}a{color:#1769aa;word-break:break-all}th:nth-child(7),td:nth-child(7){width:360px;min-width:180px;max-width:368px;white-space:normal;overflow-wrap:anywhere}.generate-btn,.copy-btn,.page-btn,.status-btn{padding:6px 10px;border:1px solid #1769aa;border-radius:5px;background:#fff;color:#1769aa;cursor:pointer;white-space:nowrap}.generate-btn:disabled,.page-btn:disabled,.status-btn:disabled{opacity:.55;cursor:wait}.copy-btn{padding:1px 5px;margin-top:2px;font-size:14px;line-height:1.1;vertical-align:middle;border:0}.copy-btn:hover,.page-btn:not(:disabled):hover{background:#eaf4ff}.copy-title-row{display:flex;align-items:center;gap:4px;margin-bottom:6px}.copy-title{font-size:14px;color:#111}.title-copy-btn{flex:0 0 auto;margin-top:0}.copy-body{color:#444}.status-btn.published{border-color:#299447;color:#207a39;background:#effaf1}.status-btn.unpublished{border-color:#999;color:#666;background:#fafafa}.notice{color:#777;font-size:12px;margin:-6px 0 14px}.pagination{display:flex;align-items:center;justify-content:center;gap:12px;padding:14px}.page-info{color:#666;font-size:13px}.toast{position:fixed;left:50%;top:24px;transform:translateX(-50%);background:#333;color:#fff;padding:9px 16px;border-radius:5px;z-index:10;opacity:0;transition:opacity .2s}.toast.show{opacity:1}
 th:nth-child(6),td:nth-child(6){width:260px;min-width:0;max-width:260px;white-space:normal;overflow-wrap:anywhere}
+th:nth-child(7),td:nth-child(7){width:auto;min-width:0;max-width:none;white-space:nowrap}
+th:nth-child(9),td:nth-child(9){width:360px;min-width:180px;max-width:368px;white-space:normal;overflow-wrap:anywhere}
 @media print{.filter-bar{display:none}.table-wrap{overflow:visible;border:0}table{min-width:0;font-size:8px}th{position:static}td img{max-width:45px;max-height:60px}}
 </style></head><body><h1>PDF 目录（分页表格）</h1><p class=\"notice\">每页显示 50 条。缺少封面图或文案时，可点击对应按钮生成。首次使用请在项目目录运行：<code>pdf-catalog serve --config config.yaml</code></p><div id=\"toast\" class=\"toast\" role=\"status\"></div><div class=\"filter-bar\"><input id=\"search\" placeholder=\"输入关键词筛选…\" oninput=\"filterRows()\"><select id=\"category-filter\" class=\"category-filter\" aria-label=\"分类筛选\" onchange=\"filterRows()\"><option value=\"\">全部分类</option></select><select id=\"subject-filter\" class=\"subject-filter\" aria-label=\"科目筛选\" onchange=\"filterRows()\"><option value=\"\">全部科目</option></select><label class=\"published-toggle\"><input id=\"show-published\" type=\"checkbox\" onchange=\"filterRows()\"><span>显示已发布</span></label></div><div class=\"table-wrap\"><table><thead><tr>""" + head + """</tr></thead><tbody id=\"rows\">""" + "".join(body) + """</tbody></table></div><div class=\"pagination\"><button id=\"prev-page\" class=\"page-btn\" type=\"button\" onclick=\"changePage(-1)\">上一页</button><span id=\"page-info\" class=\"page-info\"></span><button id=\"next-page\" class=\"page-btn\" type=\"button\" onclick=\"changePage(1)\">下一页</button></div><script>
 const API_BASE='http://127.0.0.1:8765';
@@ -455,7 +473,7 @@ async function openFolder(button){const sequence=button.dataset.sequence||'';but
 function setCopyCell(cell,value,sequence){const split=value.indexOf('\\n'),title=split>=0?value.slice(0,split):'',copy=split>=0?value.slice(split+1):value;cell.innerHTML=(title?'<div class="copy-title-row"><strong class="copy-title"></strong><button class="copy-btn title-copy-btn" type="button" title="复制标题" aria-label="复制标题" onclick="copyText(this)">⧉</button></div>':'')+'<div class="copy-body"><span class="copy-value"></span><button class="copy-btn body-copy-btn" type="button" title="复制文案" aria-label="复制文案" onclick="copyText(this)">⧉</button><button class="copy-btn" type="button" data-action="copy" data-sequence="'+sequence+'" title="重新生成文案" aria-label="重新生成文案" onclick="generate(this)">↻</button></div>';const titleNode=cell.querySelector('.copy-title'),titleButton=cell.querySelector('.title-copy-btn');if(titleNode)titleNode.textContent=title;if(titleButton)titleButton.dataset.copy=title;cell.querySelector('.copy-value').textContent=copy;cell.querySelector('.body-copy-btn').dataset.copy=copy}
 function setCoverCell(cell,value,sequence){cell.innerHTML='<a href="'+value+'" target="_blank"><img src="'+value+'" alt="封面" loading="lazy"></a><br><button class="copy-btn" type="button" data-action="cover" data-sequence="'+sequence+'" title="重新生成封面" aria-label="重新生成封面" onclick="generate(this)">↻</button>'}
 initCategoryFilter();initSubjectFilter();renderPage();
-async function generate(button){const action=button.dataset.action,sequence=button.dataset.sequence;const row=button.closest('tr')||document.querySelector('#rows tr[data-sequence="'+sequence+'"]');if(!row)return;const copyButton=row.querySelector('[data-action="copy"]');const copyPending=action==='cover'&&copyButton&&copyButton.classList.contains('generate-btn');if(copyPending){copyButton.disabled=true;copyButton.textContent='生成中…'}button.disabled=true;button.textContent='生成中…';try{const response=await fetch(API_BASE+'/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,sequence})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'生成失败');const currentRow=document.querySelector('#rows tr[data-sequence="'+sequence+'"]')||row;const currentCopyButton=currentRow.querySelector('[data-action="copy"]');const currentCoverButton=currentRow.querySelector('[data-action="cover"]');if(action==='copy'){const cell=currentCopyButton?currentCopyButton.closest('td'):currentRow.cells[6];if(cell)setCopyCell(cell,result.value,sequence)}else{if(result.copy){const copyCell=currentCopyButton?currentCopyButton.closest('td'):currentRow.cells[6];if(copyCell)setCopyCell(copyCell,result.copy,sequence)}const cell=currentCoverButton?currentCoverButton.closest('td'):currentRow.cells[7];if(cell)setCoverCell(cell,result.value,sequence)}}catch(error){const currentRow=document.querySelector('#rows tr[data-sequence="'+sequence+'"]')||row;const currentButton=currentRow.querySelector('[data-action="'+action+'"]');if(currentButton){currentButton.disabled=false;currentButton.textContent=action==='copy'?'生成文案':'生成封面'}if(copyPending){const currentCopyButton=currentRow.querySelector('[data-action="copy"]');if(currentCopyButton){currentCopyButton.disabled=false;currentCopyButton.textContent='生成文案'}}alert(error.message+'\\n请确认已启动 pdf-catalog serve，并检查 AI 配置。')}};</script></body></html>""", encoding="utf-8")
+async function generate(button){const action=button.dataset.action,sequence=button.dataset.sequence;const row=button.closest('tr')||document.querySelector('#rows tr[data-sequence="'+sequence+'"]');if(!row)return;const copyButton=row.querySelector('[data-action="copy"]');const copyPending=action==='cover'&&copyButton&&copyButton.classList.contains('generate-btn');if(copyPending){copyButton.disabled=true;copyButton.textContent='生成中…'}button.disabled=true;button.textContent='生成中…';try{const response=await fetch(API_BASE+'/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,sequence})});const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'生成失败');const currentRow=document.querySelector('#rows tr[data-sequence="'+sequence+'"]')||row;const currentCopyButton=currentRow.querySelector('[data-action="copy"]');const currentCoverButton=currentRow.querySelector('[data-action="cover"]');if(action==='copy'){const cell=currentCopyButton?currentCopyButton.closest('td'):currentRow.cells[8];if(cell)setCopyCell(cell,result.value,sequence)}else{if(result.copy){const copyCell=currentCopyButton?currentCopyButton.closest('td'):currentRow.cells[8];if(copyCell)setCopyCell(copyCell,result.copy,sequence)}const cell=currentCoverButton?currentCoverButton.closest('td'):currentRow.cells[9];if(cell)setCoverCell(cell,result.value,sequence)}}catch(error){const currentRow=document.querySelector('#rows tr[data-sequence="'+sequence+'"]')||row;const currentButton=currentRow.querySelector('[data-action="'+action+'"]');if(currentButton){currentButton.disabled=false;currentButton.textContent=action==='copy'?'生成文案':'生成封面'}if(copyPending){const currentCopyButton=currentRow.querySelector('[data-action="copy"]');if(currentCopyButton){currentCopyButton.disabled=false;currentCopyButton.textContent='生成文案'}}alert(error.message+'\\n请确认已启动 pdf-catalog serve，并检查 AI 配置。')}};</script></body></html>""", encoding="utf-8")
         # errors 按处理阶段记录；同一 PDF 可能同时在文案、封面等阶段失败。
         # 汇总时按 PDF 路径去重，避免一个 PDF 的多条错误导致成功数变成负数。
         failed_paths = {str(error.get("path", "")) for error in errors if error.get("path")}
@@ -512,10 +530,12 @@ def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_page
             LOG.info(detail)
         details.append(detail)
         semester, subject, category = directory_fields(pdf, settings)
+        page_count, size_mb = pdf_stats(pdf)
         old_row = existing_rows_by_name.get(title, {})
         row={"序号": range_start + idx, "年级":settings.grade,"学期":semester,"科目":subject,"分类":category,"PDF 文件名称":title,
+             "页数": page_count, "大小（MB）": size_mb,
              "生成文案":str(old_row.get("生成文案", "") or ""), "封面图链接":str(old_row.get("封面图链接", "") or "")}
-        for i,h in enumerate(HEADERS[8:]): row[h]=paths[i] if i<len(paths) else ""
+        for i,h in enumerate(PAGE_IMAGE_HEADERS): row[h]=paths[i] if i<len(paths) else ""
         ai_index = range_start + idx
         in_ai_range = (ai_start is None or ai_index >= int(ai_start)) and (ai_end is None or ai_index <= int(ai_end))
         if ai_limit is not None and idx >= int(ai_limit): in_ai_range = False
@@ -545,7 +565,7 @@ def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_page
     # errors 是阶段级明细，统计结果应按 PDF 去重。
     failed_paths = {str(error.get("path", "")) for error in errors if error.get("path")}
     failed_count = len(failed_paths)
-    return {"发现数":len(files),"成功数":max(0, len(rows)-failed_count),"失败数":failed_count,"生成图片数":sum(sum(bool(r[h]) for h in HEADERS[8:]) for r in rows)}
+    return {"发现数":len(files),"成功数":max(0, len(rows)-failed_count),"失败数":failed_count,"生成图片数":sum(sum(bool(r[h]) for h in PAGE_IMAGE_HEADERS) for r in rows)}
 
 
 def serve(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> None:
