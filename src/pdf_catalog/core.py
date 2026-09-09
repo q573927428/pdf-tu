@@ -582,6 +582,15 @@ def serve(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> None
     output_root.mkdir(parents=True, exist_ok=True)
     # 生成过程会读写整份 CSV/HTML；串行化可避免用户同时点击多行时后写入的旧快照覆盖新结果。
     generation_lock = threading.Lock()
+    persistence_lock = threading.Lock()
+
+    def persist_generated_rows(rows: list[dict[str, Any]], action: str, pdf: Path) -> None:
+        """在接口响应后串行保存目录文件，避免保存过程阻塞浏览器请求。"""
+        with persistence_lock:
+            try:
+                write_tables(rows, settings, [], 0, [f"HTML 按钮生成{action}: {pdf}"])
+            except Exception:
+                LOG.exception("HTML 生成结果已返回，但目录文件保存失败")
 
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
@@ -594,6 +603,9 @@ def serve(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> None
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers(); self.wfile.write(data)
+            # 后续可能仍需重写 XLSX/CSV/HTML；立即把完整响应发送给浏览器，
+            # 避免 fetch 一直等待到请求处理函数结束或服务进程退出。
+            self.wfile.flush()
 
         def do_OPTIONS(self):
             self.send_response(204); self.send_header("Access-Control-Allow-Origin", "*")
@@ -654,10 +666,12 @@ def serve(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> None
                         value = row["封面图链接"]
                     # 先返回生成结果，让网页立即结束“生成中”；目录文件随后继续保存。
                     self._json(200, {"ok": True, "value": value, "copy": response_copy})
-                    try:
-                        write_tables(rows, settings, [], 0, [f"HTML 按钮生成{action}: {pdf}"])
-                    except Exception:
-                        LOG.exception("HTML 生成结果已返回，但目录文件保存失败")
+                    threading.Thread(
+                        target=persist_generated_rows,
+                        args=(list(rows), action, pdf),
+                        name="pdf-catalog-persist",
+                        daemon=True,
+                    ).start()
                 return
             except Exception as exc:
                 LOG.exception("HTML 生成请求失败")
