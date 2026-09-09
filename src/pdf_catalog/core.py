@@ -45,7 +45,7 @@ def load_settings(path: str | Path) -> Settings:
     if wm["position"] not in {"bottom_right", "bottom_left", "center"}: raise ValueError("watermark.position 不支持")
     wm["opacity"] = max(0, min(255, int(wm["opacity"])))
     table = {"xlsx": "pdf_catalog.xlsx", "csv": "pdf_catalog.csv", "include_metadata_title": False, **raw.get("table", {})}
-    ai = {"enabled": False, "endpoint": "https://ark.cn-beijing.volces.com/api/v3", "api_key": "", "model": "", "copy_model": "", "image_model": "", "reference_image": "", "reference_images": [], "generate_copy": False, "generate_cover": False, "timeout": 60, **raw.get("ai", {})}
+    ai = {"enabled": False, "endpoint": "https://ark.cn-beijing.volces.com/api/v3", "api_key": "", "model": "", "copy_model": "", "image_model": "", "reference_image": "", "reference_images": [], "generate_copy": False, "generate_cover": False, "timeout": 300, **raw.get("ai", {})}
     reference_image = str(ai.get("reference_image") or "").strip()
     if reference_image and not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", reference_image):
         ref_path = Path(reference_image).expanduser()
@@ -200,17 +200,23 @@ def _doubao(settings: Settings, messages: list[dict[str, str]], *, image=False, 
         configured = settings.ai.get("reference_images") or []
         if isinstance(configured, str):
             configured = [configured]
-        refs = [str(x).strip() for x in configured if str(x).strip()]
+        # 封面参考图固定为：一张主图 + 当前 PDF 的一张页面图。
+        # reference_image 优先作为主图；未配置时才回退到 reference_images 的第一张。
+        refs = []
         single = str(settings.ai.get("reference_image") or "").strip()
         if single:
             refs.insert(0, single)
-        refs.extend(str(x).strip() for x in (image_references or []) if str(x).strip())
-        # 保持顺序并去重；为控制请求体大小，封面最多携带 3 张参考图。
-        # 该数量包含配置中的固定参考图和当前 PDF 页面图。
-        refs = list(dict.fromkeys(refs))[:3]
+        elif configured:
+            fallback = str(configured[0]).strip()
+            if fallback:
+                refs.append(fallback)
+        page_image = next((str(x).strip() for x in (image_references or []) if str(x).strip()), "")
+        if page_image and page_image not in refs:
+            refs.append(page_image)
+        refs = refs[:2]
         if refs:
             encoded_refs = [_image_input(ref, settings) for ref in refs]
-            # 只有一张时保持单图兼容格式；PDF 页面存在时自然使用多图数组。
+            # 只有一张时保持单图兼容格式；主图和 PDF 页面存在时使用两图数组。
             payload["image"] = encoded_refs if len(encoded_refs) > 1 else encoded_refs[0]
     else:
         endpoint = str(settings.ai.get("endpoint", "")).rstrip("/") + "/chat/completions"
@@ -551,7 +557,7 @@ def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_page
         if in_ai_range and (generate_cover_flag or settings.ai.get("generate_cover")):
             try:
                 cover_copy = row["生成文案"] or title
-                # PDF 已转换出的页面图作为服装/版式参考；有页面图时与配置的主图合并为多图输入。
+                # 仅使用第一张 PDF 页面图，并与配置的主图合并为两图输入。
                 cover_url = generate_cover(settings, cover_copy, title, category, f"{settings.grade}{subject}", paths[:5], semester=semester)
                 row["封面图链接"] = _download_cover(cover_url, pdf, settings, range_start + idx)
             except Exception as exc:
@@ -646,8 +652,13 @@ def serve(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> None
                         cover_url = generate_cover(settings, copy, row.get("PDF 文件名称", pdf.stem), row.get("分类", ""), f"{settings.grade}{row.get('科目', '')}", pages, semester=row.get("学期", "") or settings.semester)
                         row["封面图链接"] = _download_cover(cover_url, pdf, settings, sequence)
                         value = row["封面图链接"]
-                    write_tables(rows, settings, [], 0, [f"HTML 按钮生成{action}: {pdf}"])
-                self._json(200, {"ok": True, "value": value, "copy": response_copy})
+                    # 先返回生成结果，让网页立即结束“生成中”；目录文件随后继续保存。
+                    self._json(200, {"ok": True, "value": value, "copy": response_copy})
+                    try:
+                        write_tables(rows, settings, [], 0, [f"HTML 按钮生成{action}: {pdf}"])
+                    except Exception:
+                        LOG.exception("HTML 生成结果已返回，但目录文件保存失败")
+                return
             except Exception as exc:
                 LOG.exception("HTML 生成请求失败")
                 # WinError 10013 通常由 Windows 防火墙/代理拦截 Python 访问 Ark 接口，
@@ -656,8 +667,12 @@ def serve(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> None
                 cause = exc
                 while getattr(cause, "__cause__", None):
                     cause = cause.__cause__
+                if isinstance(exc, TimeoutError) or isinstance(cause, TimeoutError):
+                    detail = "AI 接口读取超时，请提高 ai.timeout 或检查网络/代理后重试"
                 if isinstance(exc, urllib.error.URLError) or isinstance(cause, urllib.error.URLError):
                     reason = getattr(cause, "reason", None) or getattr(exc, "reason", None)
+                    if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
+                        detail = "AI 接口读取超时，请提高 ai.timeout 或检查网络/代理后重试"
                     if getattr(reason, "winerror", None) == 10013 or "10013" in str(reason):
                         detail += "；Windows 阻止了 Python 的网络连接，请在防火墙/安全软件中允许 .venv\\Scripts\\python.exe 访问网络，并检查代理设置"
                 self._json(500, {"ok": False, "error": detail})
