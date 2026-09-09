@@ -302,9 +302,10 @@ def generate_copy(settings: Settings, filename: str, category: str, grade_subjec
     copy = f"{body[:150].rstrip()} {' '.join(topics)}".strip()
     return f"{title}\n{copy}"
 
-def generate_cover(settings: Settings, copy: str, name: str, category: str, grade_subject: str, page_images: list[str] | None = None) -> str:
+def generate_cover(settings: Settings, copy: str, name: str, category: str, grade_subject: str,
+                   page_images: list[str] | None = None, semester: str = "") -> str:
     prompt = f"""【角色】你是一位儿童教辅类学习资料封面设计师，擅长为宝妈群体设计温暖、干净、有手账感的竖版封面。
-【任务】根据封面文案、资料名称、亮点、年级科目生成一张竖版封面图。
+【任务】根据封面文案、资料名称、亮点、年级科目和册别生成一张竖版封面图。
 【固定段——背景与底部每张封面必须严格照抄，一个字都不能改】
 竖版儿童学习资料分享封面，日系治愈手账风，奶油白与浅燕麦色纸张底纹铺满背景，轻微纸纹颗粒与手绘笔触质感，雾蓝、暖粉、鹅黄三色低饱和点缀，暖色柔和光线与轻微纸张阴影，画面无水印无平台标识。
 - 底部约10%提示区：一行灰棕色手写小字（如“打印版·趁早存好”）
@@ -314,8 +315,9 @@ def generate_cover(settings: Settings, copy: str, name: str, category: str, grad
 - 文字可变：标题内容从文案中提取最抓眼的一句（≤10字），随不同文案变化
 - 样式可变：根据标题字数与文案语气，从以下样式中选用或微调：a. 荧光笔高亮；b. 圆角标签+印章；c. 描边贴纸字；d. 便签标题条。标题多时可缩小或折行，但位置与下划线不动。
 【可变段——中部内容区，自由发挥，不固定模板】
-请根据资料名称、亮点短句和标题语气，自主设计富有变化的手账式版面。可灵活组合或改造便签、单张卡片、错落拼贴、文件夹、练习纸、书本、铅笔、星星、纸胶带等元素；每张封面可改变卡片数量、大小、位置、倾斜角度、留白比例和装饰组合，避免重复使用相同的版式框架。资料名称与亮点要有清晰主次、方便阅读；年级科目统一放在中下部的米黄色横条标签卡中，位置可有小幅变化但需保持稳定识别。
-【本张可变内容】封面文案：“{copy}”；资料名称：“{name}”；亮点短句：“{category or '查漏补缺·每日一练'}”；年级科目：“{grade_subject}”。
+请根据资料名称、亮点短句和标题语气，自主设计富有变化的手账式版面。可灵活组合或改造便签、单张卡片、错落拼贴、文件夹、练习纸、书本、铅笔、星星、纸胶带等元素；每张封面可改变卡片数量、大小、位置、倾斜角度、留白比例和装饰组合，避免重复使用相同的版式框架。资料名称与亮点要有清晰主次、方便阅读；年级科目和册别统一放在中下部的米黄色横条标签卡中，位置可有小幅变化但需保持稳定识别。
+【本张可变内容】封面文案：“{copy}”；资料名称：“{name}”；亮点短句：“{category or '查漏补缺·每日一练'}”；年级科目：“{grade_subject}”；册别：“{semester or '全册'}”。
+【册别要求】封面必须在中下部清晰显示册别文字“{semester or '全册'}”。当册别为“上册”或“下册”时，必须原样显示这三个中文字，不得省略、替换或写成英文；册别与年级科目放在同一标签区域，并作为独立可读的信息。
 【规则】所有待渲染中文用“”标出并写清位置；全图不超过4处主要文字块，每处≤10字；文字清晰可读、笔画完整；严禁水印、平台logo。背景质感、主色调、字体气质和信息层级保持统一，版面结构、卡片形态、装饰元素与留白方式可自然变化；画面要像同一套系列资料，但不要每张都长得一样。"""
     data = _doubao(settings, [{"role": "user", "content": prompt}], image=True, image_references=(page_images or []))
     def find(v):
@@ -550,7 +552,7 @@ def run(settings: Settings, mode="run", limit=None, no_watermark=False, max_page
             try:
                 cover_copy = row["生成文案"] or title
                 # PDF 已转换出的页面图作为服装/版式参考；有页面图时与配置的主图合并为多图输入。
-                cover_url = generate_cover(settings, cover_copy, title, category, f"{settings.grade}{subject}", paths[:5])
+                cover_url = generate_cover(settings, cover_copy, title, category, f"{settings.grade}{subject}", paths[:5], semester=semester)
                 row["封面图链接"] = _download_cover(cover_url, pdf, settings, range_start + idx)
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
@@ -641,7 +643,7 @@ def serve(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> None
                         # 页面可能比 CSV 旧：即使文案早已存在，也要随封面结果回传，
                         # 以便前端结束“生成中”状态并展示真实内容。
                         response_copy = copy
-                        cover_url = generate_cover(settings, copy, row.get("PDF 文件名称", pdf.stem), row.get("分类", ""), f"{settings.grade}{row.get('科目', '')}", pages)
+                        cover_url = generate_cover(settings, copy, row.get("PDF 文件名称", pdf.stem), row.get("分类", ""), f"{settings.grade}{row.get('科目', '')}", pages, semester=row.get("学期", "") or settings.semester)
                         row["封面图链接"] = _download_cover(cover_url, pdf, settings, sequence)
                         value = row["封面图链接"]
                     write_tables(rows, settings, [], 0, [f"HTML 按钮生成{action}: {pdf}"])
